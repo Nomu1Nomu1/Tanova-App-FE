@@ -1,0 +1,32 @@
+/* Design tokens dari Figma (Tanova-App) */
+:root {
+  --bg-primary: #ffffff;
+  --bg-brand: #789e29;
+  --green-500: #93ba39;
+  --neutral-white: #ffffff;
+  --neutral-100: #f0f0f0;
+  --neutral-200: #d9d9d9;
+  --neutral-400: #adadad;
+  --text-primary: #000000;
+  --text-secondary: #adadad;
+
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --spacing-xl: 24px;
+
+  --shadow-large: 0 4px 20px rgba(0, 0, 0, 0.16);
+  --font-sans: 'Kumbh Sans', system-ui, sans-serif;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--bg-primary);
+  font-family: var(--font-sans);
+}
