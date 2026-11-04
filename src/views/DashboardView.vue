@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import Icon from '../components/Icon.vue'
 import AddAlertModal from '../components/AddAlertModal.vue'
+import tipBurnPhoto from '../assets/image/2a.jpg'
 
 const props = defineProps({
   mode: { type: String, default: 'Otomatis' },
@@ -230,7 +231,8 @@ const recommendations = [
 
         <div class="diag">
           <div class="diag__img">
-            <Icon name="leaf" />
+            <img v-if="tipBurnPhoto" :src="tipBurnPhoto" alt="Foto daun selada dengan gejala tip burn" />
+            <Icon v-else name="leaf" />
           </div>
           <div class="diag__info">
             <div class="diag__title">
@@ -450,6 +452,15 @@ const recommendations = [
   color: #fff;
   background: linear-gradient(135deg, #4d7c0f, #84a83a);
   border-radius: 8px;
+}
+.diag__img {
+  overflow: hidden;
+}
+.diag__img img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 .diag__img .icon {
   width: 24px;

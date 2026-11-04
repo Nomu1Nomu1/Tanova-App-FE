@@ -1,6 +1,9 @@
 <script setup>
 import { computed, ref } from 'vue'
 import Icon from '../components/Icon.vue'
+import foto1 from '../assets/image/1.jpg'
+import foto1a from '../assets/image/1a.jpg'
+import foto1b from '../assets/image/1b.jpg'
 
 /* ---------- Grafik prediksi pertumbuhan ---------- */
 const days = ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min']
@@ -78,6 +81,9 @@ const results = [
   { name: 'Tip Burn', ok: false, conf: 87 },
 ]
 
+// Sementara dari file lokal. Nanti diganti URL foto dari backend.
+const galleryPhotos = [foto1, foto1a, foto1b]
+
 // 24 gambar, 8 per hari (10, 9, 8 Okt), urutan terbaru dulu
 const shots = Array.from({ length: 24 }, (_, i) => {
   const r = results[(i * 5 + 1) % results.length]
@@ -87,6 +93,8 @@ const shots = Array.from({ length: 24 }, (_, i) => {
     ...r,
     stamp: `${10 - Math.floor(i / 8)} Okt 2026 · ${String(15 - (i % 8)).padStart(2, '0')}:20 WIB`,
     hue: 92 + ((i * 7) % 24),
+    // Foto galeri: 1, 1a, 1b di src/assets/image (dipakai berulang)
+    photo: galleryPhotos[i % galleryPhotos.length],
   }
 })
 
@@ -226,8 +234,9 @@ const shown = computed(() => filtered.value.slice(0, visible.value))
       <div v-if="shown.length" class="shots">
         <article v-for="s in shown" :key="s.id" class="shot">
           <div class="shot__img" :style="{ '--h': s.hue }">
+            <img v-if="s.photo" :src="s.photo" :alt="`Foto tanaman ${s.zone}, hasil: ${s.name}`" class="shot__photo" loading="lazy" />
+            <Icon v-else name="leaf" class="shot__leaf" />
             <span class="shot__zone">{{ s.zone }}</span>
-            <Icon name="leaf" class="shot__leaf" />
           </div>
           <div class="shot__body">
             <div>
@@ -551,6 +560,13 @@ button.tool:hover,
   height: 110px;
   background: linear-gradient(135deg, hsl(var(--h) 38% 34%), hsl(calc(var(--h) + 18) 42% 52%));
 }
+.shot__photo {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
 .shot__leaf {
   width: 38px;
   height: 38px;
@@ -619,7 +635,7 @@ button.tool:hover,
     grid-template-columns: 1fr;
   }
 }
-@media (max-width: 520px) {
+@media (max-width: 520px) {git status
   .shots {
     grid-template-columns: 1fr;
   }
