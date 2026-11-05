@@ -12,7 +12,17 @@ const password = ref('')
 const showPassword = ref(false)
 
 function onSubmit() {
-  emit('submit', { email: email.value, password: password.value })
+  const emailValue = email.value.trim()
+  const atIndex = emailValue.indexOf('@')
+  const domainPart = atIndex !== -1 ? emailValue.substring(atIndex + 1) : ''
+  const hasDotAfterAt = domainPart.includes('.')
+
+  if (!hasDotAfterAt) {
+    alert('Harus mengandung minimal 1 titik setelah tanda @ (contoh: tanova-user@tanova.id)')
+    return
+  }
+
+  emit('submit', { email: emailValue, password: password.value })
 }
 </script>
 
@@ -36,6 +46,7 @@ function onSubmit() {
                 type="email"
                 name="email"
                 placeholder="tanova-user@tanova.id"
+                pattern="^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
                 autocomplete="email"
                 required
               />
