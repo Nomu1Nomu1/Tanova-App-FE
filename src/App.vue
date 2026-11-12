@@ -1,7 +1,7 @@
 <script setup>
 import { ref } from 'vue'
 import SignInView from './views/SignInView.vue'
-import ProfileView from './views/ProfileView.vue'
+import TanovaDeviceView from './components/TanovaDeviceView.vue'
 
 const isLoggedIn = ref(false)
 const userEmail = ref('')
@@ -23,10 +23,10 @@ function handleLogout() {
   <!-- Tampilkan halaman Sign In jika belum login -->
   <SignInView v-if="!isLoggedIn" @submit="handleSignIn" />
 
-  <!-- Jika sudah login, kita tampilkan halaman ProfileView (atau gabungkan dengan navigasi) -->
+  <!-- Jika sudah login, tampilkan halaman Tanova Device beserta panel navigasi atas -->
   <div v-else>
-    <!-- Tombol logout sementara di atas profil agar mudah diuji -->
-    <div style="background: #f1f1f1; padding: 10px 20px; display: flex; justify-content: space-between; align-items: center;">
+    <!-- Bar navigasi/logout sementara di atas halaman -->
+    <div style="background: #f1f1f1; padding: 10px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd;">
       <span style="font-size: 14px; font-weight: 500;">Masuk sebagai: {{ userEmail }}</span>
       <button 
         @click="handleLogout" 
@@ -36,7 +36,7 @@ function handleLogout() {
       </button>
     </div>
 
-    <!-- Halaman Edit Profil Anda -->
-    <ProfileView />
+    <!-- Halaman Pengelolaan Perangkat Tanova Device -->
+    <TanovaDeviceView />
   </div>
 </template>
