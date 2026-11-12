@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import SignInView from './views/SignInView.vue'
 import TanovaDeviceView from './components/TanovaDeviceView.vue'
+import AdminView from './views/AdminView.vue'
 
 const isLoggedIn = ref(false)
 const userEmail = ref('')
@@ -36,7 +37,6 @@ function handleLogout() {
       </button>
     </div>
 
-    <!-- Halaman Pengelolaan Perangkat Tanova Device -->
-    <TanovaDeviceView />
+    <AdminView />
   </div>
 </template>
