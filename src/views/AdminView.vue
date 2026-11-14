@@ -1,23 +1,36 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
+import { api } from '../services/api'
 
 const activeTab = ref('devices')
 
-// State data simulasi
-const devicesList = ref([
-  { id: 1, name: 'Tanova Grove - 1', tbId: 'tb-dev-001', greenhouse: 'Greenhouse Zona 1', status: 'Terhubung' },
-  { id: 2, name: 'Tanova Grove - 2', tbId: 'tb-dev-002', greenhouse: 'Greenhouse Zona 2', status: 'Terhubung' },
-])
+// State data dari backend
+const devicesList = ref([])
+const greenhousesList = ref([])
+const usersList = ref([])
 
-const greenhousesList = ref([
-  { id: 'gh-01', name: 'Greenhouse Zona 1', location: 'Blok A', deviceCount: 1, owner: 'budi_user' },
-  { id: 'gh-02', name: 'Greenhouse Zona 2', location: 'Blok B', deviceCount: 1, owner: 'siti_user' },
-])
+// Fungsi untuk memuat seluruh data admin dari backend
+async function loadAdminData() {
+  try {
+    const [devicesRes, greenhousesRes, usersRes] = await Promise.all([
+      api.getDevices().catch(() => []),
+      api.getGreenhouses().catch(() => []),
+      api.getUsers().catch(() => []),
+    ])
 
-const usersList = ref([
-  { id: 1, fullName: 'Budi Santoso', username: 'budi_user', email: 'budi@tanova.com', phone: '081234567890', role: 'User', assignedGreenhouses: ['Greenhouse Zona 1'], status: 'Aktif' },
-  { id: 2, fullName: 'Siti Aminah', username: 'siti_user', email: 'siti@tanova.com', phone: '089876543210', role: 'User', assignedGreenhouses: ['Greenhouse Zona 2'], status: 'Aktif' },
-])
+    devicesList.value = Array.isArray(devicesRes) ? devicesRes : devicesRes.data || []
+    greenhousesList.value = Array.isArray(greenhousesRes)
+      ? greenhousesRes
+      : greenhousesRes.data || []
+    usersList.value = Array.isArray(usersRes) ? usersRes : usersRes.data || []
+  } catch (error) {
+    console.error('Gagal memuat data admin:', error)
+  }
+}
+
+onMounted(() => {
+  loadAdminData()
+})
 
 // State Modal Tambah Device
 const showAddDeviceModal = ref(false)
@@ -30,10 +43,10 @@ const newDevice = ref({
   greenhouseOption: 'existing',
   selectedGreenhouse: '',
   newGreenhouseName: '',
-  newGreenhouseLocation: ''
+  newGreenhouseLocation: '',
 })
 
-// State Modal Tambah User (Sesuai spesifikasi sistem)
+// State Modal Tambah User
 const showAddUserModal = ref(false)
 const newUser = ref({
   fullName: '',
@@ -42,7 +55,7 @@ const newUser = ref({
   password: '',
   phone: '',
   role: 'User',
-  selectedGreenhouses: []
+  selectedGreenhouses: [],
 })
 
 function handleOpenAddDevice() {
@@ -61,93 +74,344 @@ function handleCloseUserModal() {
   showAddUserModal.value = false
 }
 
-function handleSaveDevice() {
+async function handleSaveDevice() {
   if (!newDevice.value.name || !newDevice.value.thingsboardId) {
     alert('Nama device dan ThingsBoard Device ID wajib diisi!')
     return
   }
 
-  let targetGreenhouseName = ''
+  try {
+    let greenhouseId = newDevice.value.selectedGreenhouse
 
-  if (newDevice.value.greenhouseOption === 'existing') {
-    if (!newDevice.value.selectedGreenhouse) {
-      alert('Silakan pilih greenhouse yang tersedia!')
-      return
+    // Jika memilih membuat greenhouse baru
+    if (newDevice.value.greenhouseOption === 'new') {
+      if (!newDevice.value.newGreenhouseName) {
+        alert('Nama greenhouse baru wajib diisi!')
+        return
+      }
+      const newGh = await api.createGreenhouse({
+        name: newDevice.value.newGreenhouseName,
+        location: newDevice.value.newGreenhouseLocation || '-',
+      })
+      greenhouseId = newGh.id || newGh._id
     }
-    const foundGh = greenhousesList.value.find(g => g.id === newDevice.value.selectedGreenhouse)
-    targetGreenhouseName = foundGh ? foundGh.name : ''
-    if (foundGh) foundGh.deviceCount++
-  } else {
-    if (!newDevice.value.newGreenhouseName) {
-      alert('Nama greenhouse baru wajib diisi!')
-      return
-    }
-    const newGhId = `gh-0${greenhousesList.value.length + 1}`
-    targetGreenhouseName = newDevice.value.newGreenhouseName
-    greenhousesList.value.push({
-      id: newGhId,
-      name: newDevice.value.newGreenhouseName,
-      location: newDevice.value.newGreenhouseLocation || '-',
-      deviceCount: 1,
-      owner: 'Belum ditetapkan'
+
+    // Kirim data penambahan device ke backend
+    await api.addDevice({
+      name: newDevice.value.name,
+      tb_device_id: newDevice.value.thingsboardId.trim(),
+      greenhouse_id: greenhouseId,
+      tb_url: newDevice.value.tbUrl,
+      tb_username: newDevice.value.tbUsername.trim(),
+      tb_password: newDevice.value.tbPassword,
     })
-  }
 
-  devicesList.value.push({
-    id: devicesList.value.length + 1,
-    name: newDevice.value.name,
-    tbId: newDevice.value.thingsboardId,
-    greenhouse: targetGreenhouseName,
-    status: 'Terhubung'
-  })
+    alert('Device berhasil ditambahkan dan dihubungkan!')
+    showAddDeviceModal.value = false
 
-  showAddDeviceModal.value = false
-  newDevice.value = {
-    name: '',
-    thingsboardId: '',
-    tbUrl: 'https://thingsboard.cloud',
-    tbUsername: '',
-    tbPassword: '',
-    greenhouseOption: 'existing',
-    selectedGreenhouse: '',
-    newGreenhouseName: '',
-    newGreenhouseLocation: ''
+    // Reset form & muat ulang data terbaru
+    newDevice.value = {
+      name: '',
+      thingsboardId: '',
+      tbUrl: 'https://thingsboard.cloud',
+      tbUsername: '',
+      tbPassword: '',
+      greenhouseOption: 'existing',
+      selectedGreenhouse: '',
+      newGreenhouseName: '',
+      newGreenhouseLocation: '',
+    }
+    loadAdminData()
+  } catch (error) {
+    alert(error.message || 'Gagal menyimpan device.')
   }
 }
 
-function handleSaveUser() {
-  if (!newUser.value.fullName || !newUser.value.username || !newUser.value.email || !newUser.value.password) {
+async function handleSaveUser() {
+  if (
+    !newUser.value.fullName ||
+    !newUser.value.username ||
+    !newUser.value.email ||
+    !newUser.value.password
+  ) {
     alert('Nama lengkap, username, email, dan password wajib diisi!')
     return
   }
 
-  // Cek keunikan username/email sederhana
-  const existingUser = usersList.value.find(u => u.username === newUser.value.username || u.email === newUser.value.email)
-  if (existingUser) {
-    alert('Username atau email sudah terdaftar. Username dan email harus unik!')
+  try {
+    // Panggil API untuk membuat user baru dengan properti 'name' (bukan full_name)
+    await api.createUser({
+      name: newUser.value.fullName,
+      username: newUser.value.username,
+      email: newUser.value.email,
+      password: newUser.value.password,
+      phone: newUser.value.phone || '',
+      role: newUser.value.role ? newUser.value.role.toLowerCase() : 'operator',
+      greenhouse_ids: newUser.value.selectedGreenhouses,
+    })
+
+    alert('Akun user berhasil dibuat!')
+    showAddUserModal.value = false
+
+    // Reset form & muat ulang data terbaru
+    newUser.value = {
+      fullName: '',
+      username: '',
+      email: '',
+      password: '',
+      phone: '',
+      role: 'User',
+      selectedGreenhouses: [],
+    }
+    loadAdminData()
+  } catch (error) {
+    alert(error.message || 'Gagal membuat akun user.')
+  }
+}
+
+// State Modal Edit Device
+const showEditDeviceModal = ref(false)
+const editingDeviceId = ref(null)
+const editDeviceForm = ref({
+  name: '',
+  zone: '',
+  type: '',
+  tb_device_id: '',
+  tb_url: '',
+  tb_username: '',
+  tb_password: '',
+  notes: '',
+})
+
+function handleOpenEditDevice(dev) {
+  editingDeviceId.value = dev.id || dev._id
+  editDeviceForm.value = {
+    name: dev.name || '',
+    zone: dev.zone || '',
+    type: dev.type || '',
+    tb_device_id: dev.tb_device_id || '',
+    tb_url: dev.tb_url || 'https://thingsboard.cloud',
+    tb_username: dev.tb_username || '',
+    tb_password: dev.tb_password || '',
+    notes: dev.notes || '',
+  }
+  showEditDeviceModal.value = true
+}
+
+function handleCloseEditDeviceModal() {
+  showEditDeviceModal.value = false
+  editingDeviceId.value = null
+}
+
+async function handleUpdateDevice() {
+  if (!editingDeviceId.value) return
+  try {
+    // Panggil API PATCH untuk update informasi device
+    await api.patchDevice(editingDeviceId.value, {
+      name: editDeviceForm.value.name,
+      zone: editDeviceForm.value.zone,
+      type: editDeviceForm.value.type,
+      tb_device_id: editDeviceForm.value.tb_device_id,
+      tb_url: editDeviceForm.value.tb_url,
+      tb_username: editDeviceForm.value.tb_username,
+      tb_password: editDeviceForm.value.tb_password,
+      notes: editDeviceForm.value.notes,
+    })
+
+    alert('Perangkat berhasil diperbarui!')
+    showEditDeviceModal.value = false
+    loadAdminData()
+  } catch (error) {
+    alert(error.message || 'Gagal memperbarui perangkat.')
+  }
+}
+
+async function handleDeleteDevice(dev) {
+  const deviceId = dev.id || dev._id
+  const deviceName = dev.name || 'Perangkat ini'
+
+  if (!confirm(`Apakah Anda yakin ingin menghapus perangkat "${deviceName}"?`)) {
     return
   }
 
-  usersList.value.push({
-    id: usersList.value.length + 1,
-    fullName: newUser.value.fullName,
-    username: newUser.value.username,
-    email: newUser.value.email,
-    phone: newUser.value.phone || '-',
-    role: newUser.value.role,
-    assignedGreenhouses: [...newUser.value.selectedGreenhouses],
-    status: 'Aktif'
-  })
+  try {
+    // Panggil API DELETE device (khusus admin)
+    await api.deleteDevice(deviceId)
+    alert('Perangkat berhasil dihapus.')
+    loadAdminData()
+  } catch (error) {
+    alert(error.message || 'Gagal menghapus perangkat.')
+  }
+}
 
-  showAddUserModal.value = false
-  newUser.value = {
-    fullName: '',
-    username: '',
-    email: '',
-    password: '',
-    phone: '',
-    role: 'User',
-    selectedGreenhouses: []
+// State Modal Edit Greenhouse
+const showEditGreenhouseModal = ref(false)
+const editingGreenhouseId = ref(null)
+const editGreenhouseForm = ref({
+  name: '',
+  location: '',
+  plant_type: '',
+  area_m2: 0,
+  description: '',
+})
+
+function handleOpenEditGreenhouse(gh) {
+  editingGreenhouseId.value = gh.id || gh._id
+  editGreenhouseForm.value = {
+    name: gh.name || '',
+    location: gh.location || '',
+    plant_type: gh.plant_type || '',
+    area_m2: gh.area_m2 || 0,
+    description: gh.description || '',
+  }
+  showEditGreenhouseModal.value = true
+}
+
+function handleCloseEditGreenhouseModal() {
+  showEditGreenhouseModal.value = false
+  editingGreenhouseId.value = null
+}
+
+async function handleUpdateGreenhouse() {
+  if (!editingGreenhouseId.value) return
+  try {
+    // Panggil API PATCH untuk update informasi greenhouse
+    await api.patchGreenhouse(editingGreenhouseId.value, {
+      name: editGreenhouseForm.value.name,
+      location: editGreenhouseForm.value.location,
+      plant_type: editGreenhouseForm.value.plant_type,
+      area_m2: Number(editGreenhouseForm.value.area_m2),
+      description: editGreenhouseForm.value.description,
+    })
+
+    alert('Greenhouse berhasil diperbarui!')
+    showEditGreenhouseModal.value = false
+    loadAdminData()
+  } catch (error) {
+    alert(error.message || 'Gagal memperbarui greenhouse.')
+  }
+}
+
+async function handleDeleteGreenhouse(gh) {
+  const ghId = gh.id || gh._id
+  const ghName = gh.name || 'Greenhouse ini'
+
+  if (!confirm(`Apakah Anda yakin ingin menghapus greenhouse "${ghName}"?`)) {
+    return
+  }
+
+  try {
+    // Panggil API DELETE greenhouse (khusus admin)
+    await api.deleteGreenhouse(ghId)
+    alert('Greenhouse berhasil dihapus.')
+    loadAdminData()
+  } catch (error) {
+    alert(error.message || 'Gagal menghapus greenhouse.')
+  }
+}
+
+// State Modal Edit User
+const showEditUserModal = ref(false)
+const editingUserId = ref(null)
+const editUserForm = ref({
+  name: '',
+  username: '',
+  email: '',
+  phone: '',
+  role: 'operator',
+  is_active: true,
+})
+
+// State Modal Reset Password User
+const showResetPasswordModal = ref(false)
+const resettingUserId = ref(null)
+const newPasswordForm = ref({
+  password: '',
+})
+
+function handleOpenEditUser(usr) {
+  editingUserId.value = usr.id || usr._id
+  editUserForm.value = {
+    name: usr.name || usr.full_name || '',
+    username: usr.username || '',
+    email: usr.email || '',
+    phone: usr.phone || '',
+    role: usr.role || 'operator',
+    is_active: usr.is_active !== false,
+  }
+  showEditUserModal.value = true
+}
+
+function handleCloseEditUserModal() {
+  showEditUserModal.value = false
+  editingUserId.value = null
+}
+
+async function handleUpdateUser() {
+  if (!editingUserId.value) return
+  try {
+    // Panggil API PATCH untuk update identitas/role/status user
+    await api.patchUser(editingUserId.value, {
+      name: editUserForm.value.name,
+      username: editUserForm.value.username,
+      email: editUserForm.value.email,
+      phone: editUserForm.value.phone,
+      role: editUserForm.value.role,
+      is_active: Boolean(editUserForm.value.is_active),
+    })
+
+    alert('Informasi akun berhasil diperbarui!')
+    showEditUserModal.value = false
+    loadAdminData()
+  } catch (error) {
+    alert(error.message || 'Gagal memperbarui akun.')
+  }
+}
+
+function handleOpenResetPassword(usr) {
+  resettingUserId.value = usr.id || usr._id
+  newPasswordForm.value.password = ''
+  showResetPasswordModal.value = true
+}
+
+function handleCloseResetPasswordModal() {
+  showResetPasswordModal.value = false
+  resettingUserId.value = null
+}
+
+async function handleResetPassword() {
+  if (!resettingUserId.value || !newPasswordForm.value.password) {
+    alert('Masukkan password baru terlebih dahulu.')
+    return
+  }
+  try {
+    // Panggil API PUT untuk reset password user
+    await api.resetUserPassword(resettingUserId.value, {
+      password: newPasswordForm.value.password,
+    })
+
+    alert('Password pengguna berhasil direset!')
+    showResetPasswordModal.value = false
+  } catch (error) {
+    alert(error.message || 'Gagal mereset password.')
+  }
+}
+
+async function handleDeleteUser(usr) {
+  const userId = usr.id || usr._id
+  const userName = usr.name || usr.username || 'Pengguna ini'
+
+  if (!confirm(`Apakah Anda yakin ingin menghapus akun "${userName}"?`)) {
+    return
+  }
+
+  try {
+    // Panggil API DELETE user
+    await api.deleteUser(userId)
+    alert('Akun pengguna berhasil dihapus.')
+    loadAdminData()
+  } catch (error) {
+    alert(error.message || 'Gagal menghapus akun.')
   }
 }
 </script>
@@ -157,30 +421,34 @@ function handleSaveUser() {
     <!-- Admin Header -->
     <div class="admin-header">
       <div>
-        <h1 class="admin-title"><i class="fa-solid fa-shield-halved"></i> Panel Administrator Tanova</h1>
-        <p class="admin-subtitle">Kelola perangkat, greenhouse, dan hak akses akun pengguna sistem.</p>
+        <h1 class="admin-title">
+          <i class="fa-solid fa-shield-halved"></i> Panel Administrator Tanova
+        </h1>
+        <p class="admin-subtitle">
+          Kelola perangkat, greenhouse, dan hak akses akun pengguna sistem.
+        </p>
       </div>
       <div class="admin-badge">
         <span><i class="fa-solid fa-user-shield"></i> Admin Mode</span>
       </div>
     </div>
 
-    <!-- Tab Navigation -->
+    <!-- Navigation -->
     <div class="admin-tabs">
-      <button 
-        @click="activeTab = 'devices'" 
+      <button
+        @click="activeTab = 'devices'"
         :class="['tab-btn', activeTab === 'devices' ? 'active' : '']"
       >
         <i class="fa-solid fa-server"></i> Manajemen Device
       </button>
-      <button 
-        @click="activeTab = 'greenhouses'" 
+      <button
+        @click="activeTab = 'greenhouses'"
         :class="['tab-btn', activeTab === 'greenhouses' ? 'active' : '']"
       >
         <i class="fa-solid fa-house-chimney-window"></i> Manajemen Greenhouse
       </button>
-      <button 
-        @click="activeTab = 'users'" 
+      <button
+        @click="activeTab = 'users'"
         :class="['tab-btn', activeTab === 'users' ? 'active' : '']"
       >
         <i class="fa-solid fa-users-gear"></i> Manajemen Akun User
@@ -192,7 +460,9 @@ function handleSaveUser() {
       <div class="card-header-flex">
         <div>
           <h3 class="section-title">Daftar Perangkat Terdaftar</h3>
-          <p class="section-desc">Hubungkan device baru ke ThingsBoard dan tetapkan ke greenhouse.</p>
+          <p class="section-desc">
+            Hubungkan device baru ke ThingsBoard dan tetapkan ke greenhouse.
+          </p>
         </div>
         <button @click="handleOpenAddDevice" class="btn-primary-admin">
           <i class="fa-solid fa-plus"></i> Tambah Device Baru
@@ -211,14 +481,35 @@ function handleSaveUser() {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="dev in devicesList" :key="dev.id">
-              <td><strong>{{ dev.name }}</strong></td>
-              <td><code>{{ dev.tbId }}</code></td>
-              <td>{{ dev.greenhouse }}</td>
-              <td><span class="pill-connected"><i class="fa-solid fa-circle status-dot"></i> {{ dev.status }}</span></td>
+            <tr v-for="dev in devicesList" :key="dev.id || dev._id">
+              <td>
+                <strong>{{ dev.name }}</strong>
+              </td>
+              <td>
+                <code>{{ dev.tb_device_id || dev.thingsboardId || dev.tbId || '-' }}</code>
+              </td>
+              <td>
+                {{
+                  dev.greenhouse?.name || dev.greenhouse_name || dev.greenhouse || 'Belum diatur'
+                }}
+              </td>
+              <td>
+                <span class="pill-connected">
+                  <i class="fa-solid fa-circle status-dot"></i>
+                  {{ dev.status || 'Terhubung' }}
+                </span>
+              </td>
               <td class="text-right action-buttons-cell">
-                <button class="btn-action" title="Edit"><i class="fa-solid fa-pen-to-square"></i></button>
-                <button class="btn-action text-danger" title="Hapus"><i class="fa-solid fa-trash-can"></i></button>
+                <button @click="handleOpenEditDevice(dev)" class="btn-action" title="Edit">
+                  <i class="fa-solid fa-pen-to-square"></i>
+                </button>
+                <button
+                  @click="handleDeleteDevice(dev)"
+                  class="btn-action text-danger"
+                  title="Hapus"
+                >
+                  <i class="fa-solid fa-trash-can"></i>
+                </button>
               </td>
             </tr>
           </tbody>
@@ -231,7 +522,9 @@ function handleSaveUser() {
       <div class="card-header-flex">
         <div>
           <h3 class="section-title">Daftar Greenhouse</h3>
-          <p class="section-desc">Setiap greenhouse memiliki ID permanen dan terikat dengan kepemilikan user.</p>
+          <p class="section-desc">
+            Setiap greenhouse memiliki ID permanen dan terikat dengan kepemilikan user.
+          </p>
         </div>
       </div>
 
@@ -244,15 +537,41 @@ function handleSaveUser() {
               <th>LOKASI</th>
               <th>JUMLAH DEVICE</th>
               <th>PEMILIK AKUN</th>
+              <th class="text-right">AKSI</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="gh in greenhousesList" :key="gh.id">
-              <td><code>{{ gh.id }}</code></td>
-              <td><strong>{{ gh.name }}</strong></td>
-              <td>{{ gh.location }}</td>
-              <td>{{ gh.deviceCount }} Device</td>
-              <td><span class="user-pill"><i class="fa-solid fa-user"></i> {{ gh.owner }}</span></td>
+            <tr v-for="gh in greenhousesList" :key="gh.id || gh._id">
+              <td>
+                <code>{{ gh.id || gh._id }}</code>
+              </td>
+              <td>
+                <strong>{{ gh.name }}</strong>
+              </td>
+              <td>{{ gh.location || '-' }}</td>
+              <td>
+                {{ gh.deviceCount ?? gh.devices_count ?? (gh.devices ? gh.devices.length : 0) }}
+                Device
+              </td>
+              <td>
+                <span class="user-pill" v-if="gh.owner || gh.user || gh.username">
+                  <i class="fa-solid fa-user"></i>
+                  {{ gh.owner?.name || gh.owner?.username || gh.owner || gh.user || gh.username }}
+                </span>
+                <span v-else class="text-muted">Belum ditetapkan</span>
+              </td>
+              <td class="text-right action-buttons-cell">
+                <button @click="handleOpenEditGreenhouse(gh)" class="btn-action" title="Edit">
+                  <i class="fa-solid fa-pen-to-square"></i>
+                </button>
+                <button
+                  @click="handleDeleteGreenhouse(gh)"
+                  class="btn-action text-danger"
+                  title="Hapus"
+                >
+                  <i class="fa-solid fa-trash-can"></i>
+                </button>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -264,7 +583,9 @@ function handleSaveUser() {
       <div class="card-header-flex">
         <div>
           <h3 class="section-title">Manajemen Akun Pengguna</h3>
-          <p class="section-desc">Buat akun, atur hak akses greenhouse, dan reset kredensial user.</p>
+          <p class="section-desc">
+            Buat akun, atur hak akses greenhouse, dan reset kredensial user.
+          </p>
         </div>
         <button @click="handleOpenAddUser" class="btn-primary-admin">
           <i class="fa-solid fa-user-plus"></i> Buat Akun User
@@ -285,22 +606,54 @@ function handleSaveUser() {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="usr in usersList" :key="usr.id">
-              <td><strong>{{ usr.fullName }}</strong></td>
+            <tr v-for="usr in usersList" :key="usr.id || usr._id">
+              <td>
+                <strong>{{ usr.name || usr.full_name }}</strong>
+              </td>
               <td>{{ usr.username }}</td>
               <td>{{ usr.email }}</td>
               <td>{{ usr.role }}</td>
               <td>
-                <span v-for="gh in usr.assignedGreenhouses" :key="gh" class="greenhouse-badge">
-                  {{ gh }}
-                </span>
-                <span v-if="!usr.assignedGreenhouses.length" class="text-muted">-</span>
+                <template
+                  v-if="
+                    (usr.assignedGreenhouses || usr.greenhouses || usr.greenhouse_ids) &&
+                    (usr.assignedGreenhouses || usr.greenhouses || usr.greenhouse_ids).length
+                  "
+                >
+                  <span
+                    v-for="gh in usr.assignedGreenhouses || usr.greenhouses || usr.greenhouse_ids"
+                    :key="gh.id || gh"
+                    class="greenhouse-badge"
+                  >
+                    {{ gh.name || gh }}
+                  </span>
+                </template>
+                <span v-else class="text-muted">-</span>
               </td>
-              <td><span class="pill-active"><i class="fa-solid fa-circle status-dot"></i> {{ usr.status }}</span></td>
+              <td>
+                <span class="pill-active"
+                  ><i class="fa-solid fa-circle status-dot"></i>
+                  {{ usr.is_active !== false ? 'Aktif' : 'Nonaktif' }}</span
+                >
+              </td>
               <td class="text-right action-buttons-cell">
-                <button class="btn-action" title="Ubah Password"><i class="fa-solid fa-key"></i></button>
-                <button class="btn-action" title="Edit"><i class="fa-solid fa-pen-to-square"></i></button>
-                <button class="btn-action text-danger" title="Nonaktifkan"><i class="fa-solid fa-ban"></i></button>
+                <button
+                  @click="handleOpenResetPassword(usr)"
+                  class="btn-action"
+                  title="Reset Password"
+                >
+                  <i class="fa-solid fa-key"></i>
+                </button>
+                <button @click="handleOpenEditUser(usr)" class="btn-action" title="Edit Akun">
+                  <i class="fa-solid fa-pen-to-square"></i>
+                </button>
+                <button
+                  @click="handleDeleteUser(usr)"
+                  class="btn-action text-danger"
+                  title="Hapus Akun"
+                >
+                  <i class="fa-solid fa-trash-can"></i>
+                </button>
               </td>
             </tr>
           </tbody>
@@ -312,19 +665,33 @@ function handleSaveUser() {
     <div v-if="showAddDeviceModal" class="modal-overlay">
       <div class="modal-card">
         <div class="modal-header">
-          <h3 class="section-title"><i class="fa-solid fa-server"></i> Tambah & Hubungkan Device Baru</h3>
-          <button @click="handleCloseDeviceModal" class="btn-close"><i class="fa-solid fa-xmark"></i></button>
+          <h3 class="section-title">
+            <i class="fa-solid fa-server"></i> Tambah & Hubungkan Device Baru
+          </h3>
+          <button @click="handleCloseDeviceModal" class="btn-close">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
         </div>
 
         <div class="modal-body">
           <div class="form-group">
             <label>Nama Device</label>
-            <input v-model="newDevice.name" type="text" placeholder="Contoh: Tanova Grove - 3" class="form-input" />
+            <input
+              v-model="newDevice.name"
+              type="text"
+              placeholder="Contoh: Tanova Grove - 3"
+              class="form-input"
+            />
           </div>
 
           <div class="form-group">
             <label>ThingsBoard Device ID</label>
-            <input v-model="newDevice.thingsboardId" type="text" placeholder="Masukkan ID Device ThingsBoard" class="form-input" />
+            <input
+              v-model="newDevice.thingsboardId"
+              type="text"
+              placeholder="Masukkan ID Device ThingsBoard"
+              class="form-input"
+            />
           </div>
 
           <div class="form-row">
@@ -334,19 +701,29 @@ function handleSaveUser() {
             </div>
             <div class="form-group">
               <label>Username ThingsBoard</label>
-              <input v-model="newDevice.tbUsername" type="text" placeholder="Username TB" class="form-input" />
+              <input
+                v-model="newDevice.tbUsername"
+                type="text"
+                placeholder="Username TB"
+                class="form-input"
+              />
             </div>
           </div>
 
           <div class="form-group">
             <label>Password ThingsBoard</label>
-            <input v-model="newDevice.tbPassword" type="password" placeholder="Password TB" class="form-input" />
+            <input
+              v-model="newDevice.tbPassword"
+              type="password"
+              placeholder="Password TB"
+              class="form-input"
+            />
           </div>
 
           <hr class="form-divider" />
 
           <label class="form-label-title">Penetapan Greenhouse</label>
-          
+
           <div class="radio-group">
             <label class="radio-label">
               <input type="radio" v-model="newDevice.greenhouseOption" value="existing" />
@@ -371,11 +748,21 @@ function handleSaveUser() {
           <div v-if="newDevice.greenhouseOption === 'new'" class="sub-form-box">
             <div class="form-group">
               <label>Nama Greenhouse Baru</label>
-              <input v-model="newDevice.newGreenhouseName" type="text" placeholder="Contoh: Greenhouse Zona 3" class="form-input" />
+              <input
+                v-model="newDevice.newGreenhouseName"
+                type="text"
+                placeholder="Contoh: Greenhouse Zona 3"
+                class="form-input"
+              />
             </div>
             <div class="form-group mb-0">
               <label>Lokasi / Blok</label>
-              <input v-model="newDevice.newGreenhouseLocation" type="text" placeholder="Contoh: Blok C" class="form-input" />
+              <input
+                v-model="newDevice.newGreenhouseLocation"
+                type="text"
+                placeholder="Contoh: Blok C"
+                class="form-input"
+              />
             </div>
           </div>
         </div>
@@ -387,58 +774,214 @@ function handleSaveUser() {
       </div>
     </div>
 
-    <!-- MODAL BUAT AKUN USER (Sesuai spesifikasi sistem) -->
+    <!-- MODAL EDIT DEVICE -->
+    <div v-if="showEditDeviceModal" class="modal-overlay">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 class="section-title">
+            <i class="fa-solid fa-pen-to-square"></i> Edit Informasi Perangkat
+          </h3>
+          <button @click="handleCloseEditDeviceModal" class="btn-close">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Nama Device</label>
+            <input v-model="editDeviceForm.name" type="text" class="form-input" />
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label>Zona</label>
+              <input v-model="editDeviceForm.zone" type="text" class="form-input" />
+            </div>
+            <div class="form-group">
+              <label>Tipe Device</label>
+              <input v-model="editDeviceForm.type" type="text" class="form-input" />
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>ThingsBoard Device ID</label>
+            <input v-model="editDeviceForm.tb_device_id" type="text" class="form-input" />
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label>URL ThingsBoard</label>
+              <input v-model="editDeviceForm.tb_url" type="text" class="form-input" />
+            </div>
+            <div class="form-group">
+              <label>Username ThingsBoard</label>
+              <input v-model="editDeviceForm.tb_username" type="text" class="form-input" />
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Password ThingsBoard</label>
+            <input
+              v-model="editDeviceForm.tb_password"
+              type="password"
+              placeholder="Kosongkan jika tidak diubah"
+              class="form-input"
+            />
+          </div>
+
+          <div class="form-group">
+            <label>Catatan / Notes</label>
+            <textarea v-model="editDeviceForm.notes" class="form-input" rows="2"></textarea>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button @click="handleCloseEditDeviceModal" class="btn-secondary-admin">Batal</button>
+          <button @click="handleUpdateDevice" class="btn-primary-admin">Simpan Perubahan</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL EDIT GREENHOUSE -->
+    <div v-if="showEditGreenhouseModal" class="modal-overlay">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 class="section-title">
+            <i class="fa-solid fa-pen-to-square"></i> Edit Informasi Greenhouse
+          </h3>
+          <button @click="handleCloseEditGreenhouseModal" class="btn-close">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Nama Greenhouse</label>
+            <input v-model="editGreenhouseForm.name" type="text" class="form-input" />
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label>Lokasi</label>
+              <input v-model="editGreenhouseForm.location" type="text" class="form-input" />
+            </div>
+            <div class="form-group">
+              <label>Jenis Tanaman (Plant Type)</label>
+              <input v-model="editGreenhouseForm.plant_type" type="text" class="form-input" />
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Luas Area (m²)</label>
+            <input v-model.number="editGreenhouseForm.area_m2" type="number" class="form-input" />
+          </div>
+
+          <div class="form-group">
+            <label>Deskripsi</label>
+            <textarea
+              v-model="editGreenhouseForm.description"
+              class="form-input"
+              rows="2"
+            ></textarea>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button @click="handleCloseEditGreenhouseModal" class="btn-secondary-admin">Batal</button>
+          <button @click="handleUpdateGreenhouse" class="btn-primary-admin">
+            Simpan Perubahan
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL BUAT AKUN USER -->
     <div v-if="showAddUserModal" class="modal-overlay">
       <div class="modal-card">
         <div class="modal-header">
-          <h3 class="section-title"><i class="fa-solid fa-user-plus"></i> Buat Akun Pengguna Baru</h3>
-          <button @click="handleCloseUserModal" class="btn-close"><i class="fa-solid fa-xmark"></i></button>
+          <h3 class="section-title">
+            <i class="fa-solid fa-user-plus"></i> Buat Akun Pengguna Baru
+          </h3>
+          <button @click="handleCloseUserModal" class="btn-close">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
         </div>
 
         <div class="modal-body">
           <div class="form-group">
             <label>Nama Lengkap</label>
-            <input v-model="newUser.fullName" type="text" placeholder="Contoh: Anna Emila" class="form-input" />
+            <input
+              v-model="newUser.fullName"
+              type="text"
+              placeholder="Contoh: Anna Emila"
+              class="form-input"
+            />
           </div>
 
           <div class="form-row">
             <div class="form-group">
               <label>Username</label>
-              <input v-model="newUser.username" type="text" placeholder="Contoh: anna_emila" class="form-input" />
+              <input
+                v-model="newUser.username"
+                type="text"
+                placeholder="Contoh: anna_emila"
+                class="form-input"
+              />
             </div>
             <div class="form-group">
               <label>Email</label>
-              <input v-model="newUser.email" type="email" placeholder="anna@tanova.com" class="form-input" />
+              <input
+                v-model="newUser.email"
+                type="email"
+                placeholder="anna@tanova.com"
+                class="form-input"
+              />
             </div>
           </div>
 
           <div class="form-row">
             <div class="form-group">
               <label>Password Awal</label>
-              <input v-model="newUser.password" type="password" placeholder="Minimal 6 karakter" class="form-input" />
+              <input
+                v-model="newUser.password"
+                type="password"
+                placeholder="Minimal 6 karakter"
+                class="form-input"
+              />
             </div>
             <div class="form-group">
               <label>Nomor Telepon (Opsional)</label>
-              <input v-model="newUser.phone" type="text" placeholder="08xxxxxxxxxx" class="form-input" />
+              <input
+                v-model="newUser.phone"
+                type="text"
+                placeholder="08xxxxxxxxxx"
+                class="form-input"
+              />
             </div>
           </div>
 
           <div class="form-group">
             <label>Role / Hak Akses</label>
             <select v-model="newUser.role" class="form-input">
-              <option value="User">User</option>
-              <option value="Admin">Admin</option>
+              <option value="operator">Operator / User</option>
+              <option value="admin">Admin</option>
             </select>
           </div>
 
           <hr class="form-divider" />
 
           <label class="form-label-title">Penetapan Greenhouse</label>
-          <p class="section-desc mb-2">Pilih satu atau beberapa greenhouse yang akan diberikan kepada user ini.</p>
-          
+          <p class="section-desc mb-2">
+            Pilih satu atau beberapa greenhouse yang akan diberikan kepada user ini.
+          </p>
+
           <div class="checkbox-group">
-            <label v-for="gh in greenhousesList" :key="gh.id" class="checkbox-label">
-              <input type="checkbox" :value="gh.name" v-model="newUser.selectedGreenhouses" />
+            <label v-for="gh in greenhousesList" :key="gh.id || gh._id" class="checkbox-label">
+              <input
+                type="checkbox"
+                :value="gh.id || gh._id"
+                v-model="newUser.selectedGreenhouses"
+              />
               {{ gh.name }} (Lokasi: {{ gh.location }})
             </label>
           </div>
@@ -447,6 +990,96 @@ function handleSaveUser() {
         <div class="modal-footer">
           <button @click="handleCloseUserModal" class="btn-secondary-admin">Batal</button>
           <button @click="handleSaveUser" class="btn-primary-admin">Simpan Akun User</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL EDIT USER -->
+    <div v-if="showEditUserModal" class="modal-overlay">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 class="section-title">
+            <i class="fa-solid fa-pen-to-square"></i> Edit Informasi Akun User
+          </h3>
+          <button @click="handleCloseEditUserModal" class="btn-close">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Nama Lengkap</label>
+            <input v-model="editUserForm.name" type="text" class="form-input" />
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label>Username</label>
+              <input v-model="editUserForm.username" type="text" class="form-input" />
+            </div>
+            <div class="form-group">
+              <label>Email</label>
+              <input v-model="editUserForm.email" type="email" class="form-input" />
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label>Nomor Telepon</label>
+              <input v-model="editUserForm.phone" type="text" class="form-input" />
+            </div>
+            <div class="form-group">
+              <label>Role Akses</label>
+              <select v-model="editUserForm.role" class="form-input">
+                <option value="admin">Admin</option>
+                <option value="operator">Operator / User</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Status Akun</label>
+            <select v-model="editUserForm.is_active" class="form-input">
+              <option :value="true">Aktif</option>
+              <option :value="false">Nonaktif</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button @click="handleCloseEditUserModal" class="btn-secondary-admin">Batal</button>
+          <button @click="handleUpdateUser" class="btn-primary-admin">Simpan Perubahan</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL RESET PASSWORD USER -->
+    <div v-if="showResetPasswordModal" class="modal-overlay">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 class="section-title"><i class="fa-solid fa-key"></i> Reset Password Pengguna</h3>
+          <button @click="handleCloseResetPasswordModal" class="btn-close">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Password Baru</label>
+            <input
+              v-model="newPasswordForm.password"
+              type="password"
+              placeholder="Masukkan password baru untuk user"
+              class="form-input"
+            />
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button @click="handleCloseResetPasswordModal" class="btn-secondary-admin">Batal</button>
+          <button @click="handleResetPassword" class="btn-primary-admin">
+            Simpan Password Baru
+          </button>
         </div>
       </div>
     </div>
@@ -519,9 +1152,9 @@ function handleSaveUser() {
 }
 
 .tab-btn.active {
-  background: #93BA39;
+  background: #93ba39;
   color: #fff;
-  border-color: #93BA39;
+  border-color: #93ba39;
 }
 
 .admin-card {
@@ -553,7 +1186,7 @@ function handleSaveUser() {
 
 .btn-primary-admin {
   padding: 8px 16px;
-  background: #93BA39;
+  background: #93ba39;
   color: #fff;
   border: none;
   border-radius: 8px;
@@ -611,8 +1244,9 @@ function handleSaveUser() {
   vertical-align: middle;
 }
 
-.pill-connected, .pill-active {
-  background: #E5F2CC;
+.pill-connected,
+.pill-active {
+  background: #e5f2cc;
   color: #558b2f;
   padding: 4px 10px;
   border-radius: 12px;
@@ -712,7 +1346,7 @@ function handleSaveUser() {
   border-radius: 12px;
   width: 550px;
   max-width: 90%;
-  box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
   display: flex;
   flex-direction: column;
   max-height: 90vh;
@@ -769,7 +1403,7 @@ function handleSaveUser() {
 }
 
 .form-input:focus {
-  border-color: #93BA39;
+  border-color: #93ba39;
   outline: none;
 }
 
@@ -792,14 +1426,16 @@ function handleSaveUser() {
   margin-bottom: 4px;
 }
 
-.radio-group, .checkbox-group {
+.radio-group,
+.checkbox-group {
   display: flex;
   flex-direction: column;
   gap: 8px;
   margin-bottom: 12px;
 }
 
-.radio-label, .checkbox-label {
+.radio-label,
+.checkbox-label {
   display: flex;
   align-items: center;
   gap: 8px;

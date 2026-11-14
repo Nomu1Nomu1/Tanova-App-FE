@@ -1,28 +1,50 @@
 <script setup>
 import { ref } from 'vue'
+import { api } from '../services/api'
 import mailIcon from '../assets/icons/mail-outline.svg'
 import lockIcon from '../assets/icons/lock-outline.svg'
 import visibilityOffIcon from '../assets/icons/visibility-off.svg'
 import heroIllustration from '../assets/icons/hero-illustration.svg'
 
-const emit = defineEmits(['submit'])
+const emit = defineEmits(['login-success'])
 
-const email = ref('')
+const username = ref('')
 const password = ref('')
 const showPassword = ref(false)
+const isLoading = ref(false)
 
-function onSubmit() {
-  const emailValue = email.value.trim()
-  const atIndex = emailValue.indexOf('@')
-  const domainPart = atIndex !== -1 ? emailValue.substring(atIndex + 1) : ''
-  const hasDotAfterAt = domainPart.includes('.')
-
-  if (!hasDotAfterAt) {
-    alert('Harus mengandung minimal 1 titik setelah tanda @ (contoh: tanova-user@tanova.id)')
+async function onSubmit() {
+  const usernameValue = username.value.trim()
+  if (!usernameValue || !password.value) {
+    alert('Username dan password wajib diisi.')
     return
   }
 
-  emit('submit', { email: emailValue, password: password.value })
+  try {
+    isLoading.value = true
+
+    const response = await api.login({
+      username: usernameValue,
+      password: password.value,
+    })
+
+    const token = response.access_token || response.token
+    if (token) {
+      localStorage.setItem('tanova_token', token)
+    }
+    if (response.refresh_token) {
+      localStorage.setItem('tanova_refresh_token', response.refresh_token)
+    }
+
+    const profile = await api.getMe()
+    localStorage.setItem('tanova_user', JSON.stringify(profile))
+
+    emit('login-success', profile)
+  } catch (error) {
+    alert(error.message || 'Login gagal. Periksa kembali username dan password Anda.')
+  } finally {
+    isLoading.value = false
+  }
 }
 </script>
 
@@ -31,23 +53,22 @@ function onSubmit() {
     <section class="signin__form-side">
       <header class="signin__title">
         <h1>Sign In</h1>
-        <p>Gunakan Email dan Password yang tertera pada struk pembelian</p>
+        <p>Gunakan Username dan Password akun Tanova Anda</p>
       </header>
 
       <form class="signin__form" @submit.prevent="onSubmit">
         <div class="card">
           <div class="field">
-            <label for="email">Email</label>
+            <label for="username">Username</label>
             <div class="input">
               <img class="input__icon input__icon--left" :src="mailIcon" alt="" />
               <input
-                id="email"
-                v-model="email"
-                type="email"
-                name="email"
-                placeholder="tanova-user@tanova.id"
-                pattern="^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
-                autocomplete="email"
+                id="username"
+                v-model="username"
+                type="text"
+                name="username"
+                placeholder="Masukkan username"
+                autocomplete="username"
                 required
               />
             </div>
@@ -82,7 +103,9 @@ function onSubmit() {
 
         <a class="signin__forgot" href="#">Forget Password?</a>
 
-        <button type="submit" class="signin__button">SIGN IN</button>
+        <button type="submit" class="signin__button" :disabled="isLoading">
+          {{ isLoading ? 'MEMPROSES...' : 'SIGN IN' }}
+        </button>
       </form>
     </section>
 
@@ -100,7 +123,6 @@ function onSubmit() {
 
 <style scoped>
 .signin {
-  /* 1 unit = 1px di desain Figma. u: skala form, h: skala panel hero */
   --u: clamp(0.7px, min(100vw / 1440, 100vh / 800), 1.4px);
   --h: clamp(0.6px, min(100vw / 1440, 100vh / 1024), 1.3px);
   display: flex;
@@ -110,7 +132,6 @@ function onSubmit() {
   overflow: clip;
 }
 
-/* ---------- Sisi kiri: form ---------- */
 .signin__form-side {
   flex: 1;
   min-width: 0;
@@ -194,7 +215,9 @@ function onSubmit() {
   background: var(--neutral-100);
   border: 1px solid var(--neutral-200);
   border-radius: calc(12 * var(--u));
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .input input {
@@ -290,7 +313,9 @@ function onSubmit() {
   border: 0;
   border-radius: calc(16 * var(--u));
   cursor: pointer;
-  transition: filter 0.15s ease, transform 0.1s ease;
+  transition:
+    filter 0.15s ease,
+    transform 0.1s ease;
 }
 
 .signin__button:hover {
@@ -306,7 +331,6 @@ function onSubmit() {
   outline-offset: 3px;
 }
 
-/* ---------- Sisi kanan: hero (menempel di kanan, setinggi layar) ---------- */
 .signin__hero {
   flex: 0 0 max(calc(740 * var(--h)), 44vw);
   position: sticky;
@@ -337,7 +361,6 @@ function onSubmit() {
   display: block;
 }
 
-/* Ilustrasi dikunci ke pojok kanan-bawah panel */
 .hero__art {
   position: absolute;
   right: calc(-189.5 * var(--h));
@@ -357,7 +380,6 @@ function onSubmit() {
   height: 115.75%;
 }
 
-/* ---------- Responsif ---------- */
 @media (max-width: 860px) {
   .signin {
     --u: min(1px, calc((100vw - 32px) / 553));
