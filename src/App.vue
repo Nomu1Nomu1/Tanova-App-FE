@@ -1,11 +1,15 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import SignInView from './views/SignInView.vue'
+import AppLayout from './components/AppLayout.vue'
+import DashboardView from './views/DashboardView.vue'
+import AiView from './views/AiView.vue'
 import TanovaDeviceView from './components/TanovaDeviceView.vue'
 import AdminView from './views/AdminView.vue'
 
 const isLoggedIn = ref(false)
 const currentUser = ref(null)
+const page = ref('dashboard') // 'dashboard' | 'device' | 'ai' | 'profile'
 
 onMounted(() => {
   const token = localStorage.getItem('tanova_token')
@@ -32,43 +36,45 @@ function handleLogout() {
   localStorage.removeItem('tanova_user')
   currentUser.value = null
   isLoggedIn.value = false
+  page.value = 'dashboard'
 }
+
+// Label di bagian bawah sidebar berbeda di tiap halaman (sesuai desain)
+const onDeviceSide = computed(() => page.value === 'device' || page.value === 'ai')
+const statusLabel = computed(() => (onDeviceSide.value ? 'STATUS PERANGKAT' : 'STATUS DEVICE'))
+const statusBadge = computed(() => (onDeviceSide.value ? 'Terhubung' : 'Connected'))
+const activeMenu = computed(() => (page.value === 'profile' ? 'dashboard' : page.value))
 </script>
 
 <template>
   <SignInView v-if="!isLoggedIn" @login-success="handleLoginSuccess" />
 
-  <div v-else>
-    <div
-      style="
-        background: #f1f1f1;
-        padding: 10px 20px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        border-bottom: 1px solid #ddd;
-      "
-    >
-      <span style="font-size: 14px; font-weight: 500">
-        Masuk sebagai: {{ currentUser?.username || 'Pengguna' }} ({{ currentUser?.role || 'user' }})
-      </span>
-      <button
-        @click="handleLogout"
-        style="
-          padding: 6px 14px;
-          background: #dc3545;
-          color: white;
-          border: none;
-          border-radius: 6px;
-          cursor: pointer;
-          font-size: 13px;
-        "
-      >
-        Sign Out
-      </button>
-    </div>
+  <AdminView v-else-if="currentUser?.role === 'admin'" @logout="handleLogout" />
 
-    <AdminView v-if="currentUser?.role === 'admin'" />
-    <TanovaDeviceView v-else />
-  </div>
+  <AppLayout
+    v-else
+    v-slot="{ mode }"
+    :active="activeMenu"
+    :status-label="statusLabel"
+    :status-badge="statusBadge"
+    :dashboard-label="page === 'ai' ? 'Dasbor' : 'Dashboard'"
+    @navigate="page = $event"
+    @edit-profile="page = 'profile'"
+    @logout="handleLogout"
+  >
+    <DashboardView v-if="page === 'dashboard'" :mode="mode" />
+    <AiView v-else-if="page === 'ai'" />
+    <TanovaDeviceView v-else-if="page === 'device'" />
+    <p v-else class="placeholder">
+      {{ page === 'profile' ? 'Profil Pengguna' : 'None' }}
+    </p>
+  </AppLayout>
 </template>
+
+<style scoped>
+.placeholder {
+  padding: 40px 0;
+  text-align: center;
+  color: #5f6b52;
+}
+</style>
