@@ -1,42 +1,55 @@
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import SignInView from './views/SignInView.vue'
+import AppLayout from './components/AppLayout.vue'
+import DashboardView from './views/DashboardView.vue'
+import AiView from './views/AiView.vue'
 import TanovaDeviceView from './components/TanovaDeviceView.vue'
 
 const isLoggedIn = ref(false)
-const userEmail = ref('')
+const page = ref('dashboard') // 'dashboard' | 'device' | 'ai' | 'profile'
 
-function handleSignIn({ email, password }) {
-  console.log('sign in', email, password.length)
-  
-  userEmail.value = email
-  isLoggedIn.value = true
-}
-
-function handleLogout() {
+function logout() {
   isLoggedIn.value = false
-  userEmail.value = ''
+  page.value = 'dashboard'
 }
+
+// Label di bagian bawah sidebar berbeda di tiap halaman (sesuai desain)
+const onDeviceSide = computed(() => page.value === 'device' || page.value === 'ai')
+const statusLabel = computed(() => (onDeviceSide.value ? 'STATUS PERANGKAT' : 'STATUS DEVICE'))
+const statusBadge = computed(() => (onDeviceSide.value ? 'Terhubung' : 'Connected'))
+const activeMenu = computed(() => (page.value === 'profile' ? 'dashboard' : page.value))
 </script>
 
 <template>
-  <!-- Tampilkan halaman Sign In jika belum login -->
-  <SignInView v-if="!isLoggedIn" @submit="handleSignIn" />
+  <SignInView v-if="!isLoggedIn" @submit="isLoggedIn = true" />
 
-  <!-- Jika sudah login, tampilkan halaman Tanova Device beserta panel navigasi atas -->
-  <div v-else>
-    <!-- Bar navigasi/logout sementara di atas halaman -->
-    <div style="background: #f1f1f1; padding: 10px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd;">
-      <span style="font-size: 14px; font-weight: 500;">Masuk sebagai: {{ userEmail }}</span>
-      <button 
-        @click="handleLogout" 
-        style="padding: 6px 14px; background: #dc3545; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 13px;"
-      >
-        Sign Out
-      </button>
-    </div>
-
-    <!-- Halaman Pengelolaan Perangkat Tanova Device -->
-    <TanovaDeviceView />
-  </div>
+  <AppLayout
+    v-else
+    v-slot="{ mode }"
+    :active="activeMenu"
+    :status-label="statusLabel"
+    :status-badge="statusBadge"
+    :dashboard-label="page === 'ai' ? 'Dasbor' : 'Dashboard'"
+    @navigate="page = $event"
+    @edit-profile="page = 'profile'"
+    @logout="logout"
+  >
+    <DashboardView v-if="page === 'dashboard'" :mode="mode" />
+    <AiView v-else-if="page === 'ai'" />
+    <!-- Menampilkan komponen TanovaDeviceView pada halaman device -->
+    <TanovaDeviceView v-else-if="page === 'device'" />
+    <!-- Halaman default / fallback jika halaman lain dipilih -->
+    <p v-else class="placeholder">
+      {{ page === 'profile' ? 'Profil Pengguna' : 'Halaman tidak ditemukan' }} 
+    </p>
+  </AppLayout>
 </template>
+
+<style scoped>
+.placeholder {
+  padding: 40px 0;
+  text-align: center;
+  color: #5f6b52;
+}
+</style>
