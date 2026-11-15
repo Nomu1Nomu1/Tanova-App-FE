@@ -66,7 +66,7 @@ const activeMenu = computed(() => (page.value === 'profile' ? 'dashboard' : page
     <AiView v-else-if="page === 'ai'" />
     <TanovaDeviceView v-else-if="page === 'device'" />
     <p v-else class="placeholder">
-      {{ page === 'profile' ? 'Profil Pengguna' : 'None' }}
+      {{ page === 'profile' ? 'Profil Pengguna' : 'Halaman tidak ditemukan' }} 
     </p>
   </AppLayout>
 </template>
