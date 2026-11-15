@@ -1,86 +1,507 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { api } from '../services/api'
 
 const searchQuery = ref('')
 const selectedStatus = ref('Semua Status')
 
-const devices = ref([
-  {
-    name: 'Tanova Grove - 1',
-    code: 'TNV-GRV-001',
-    statusTag: 'Dipilih',
-    location: 'Zona 1 · Selada',
-    connection: 'Terhubung',
-    sensorCount: '4 / 4 aktif',
-    sync: 'Baru saja',
-  },
-  {
-    name: 'Tanova Grove - 2',
-    code: 'TNV-GRV-002',
-    statusTag: '',
-    location: 'Zona 2 · Selada',
-    connection: 'Terhubung',
-    sensorCount: '4 / 4 aktif',
-    sync: '1 menit lalu',
-  },
-  {
-    name: 'Tanova Grove - 3',
-    code: 'TNV-GRV-003',
-    statusTag: '',
-    location: 'Zona 3 · Selada',
-    connection: 'Terputus',
-    sensorCount: '0 / 4 aktif',
-    sync: '07:58 WIB',
-  },
-])
+const devicesList = ref([])
+const selectedDevice = ref(null)
+const overviewData = ref(null)
 
-const sensors = ref([
-  {
-    name: 'pH Larutan',
-    desc: 'Probe pH · A01',
-    value: '6.0 pH',
-    status: 'Aktif',
-    calibration: '9 Sep 2026',
-    nextCal: 'Berikutnya 9 Okt',
-  },
-  {
-    name: 'EC / TDS',
-    desc: 'Probe EC · A02',
-    value: '1.42 mS/cm',
-    status: 'Aktif',
-    calibration: '1 Sep 2026',
-    nextCal: 'Jadwal hari ini',
-    urgent: true,
-  },
-  {
-    name: 'Suhu Air',
-    desc: 'DS18B20 · D01',
-    value: '23.4 °C',
-    status: 'Aktif',
-    calibration: '3 Sep 2026',
-    nextCal: 'Berikutnya 3 Okt',
-  },
-  {
-    name: 'Level Tangki',
-    desc: 'Ultrasonik · D02',
-    value: '82 %',
-    status: 'Aktif',
-    calibration: '3 Sep 2026',
-    nextCal: 'Berikutnya 3 Okt',
-  },
-])
+const loading = ref(false)
+const overviewError = ref('')
+const lastUpdatedAt = ref(null)
+const isRefreshingOverview = ref(false)
+const realtimeStatus = ref('Menghubungkan')
 
-function handleRefresh() {
-  alert('Memperbarui data perangkat...')
+let refreshTimer = null
+let streamController = null
+let overviewRequestId = 0
+
+function unwrapResponse(response) {
+  return response?.data ?? response
+}
+
+function getArrayResponse(response) {
+  const data = unwrapResponse(response)
+
+  if (Array.isArray(data)) return data
+  if (Array.isArray(data?.items)) return data.items
+  if (Array.isArray(data?.devices)) return data.devices
+
+  return []
+}
+
+// ==============================
+// LOAD DEVICES
+// ==============================
+
+async function loadDevices() {
+  loading.value = true
+
+  try {
+    const response = await api.getDevices()
+    devicesList.value = getArrayResponse(response)
+
+    if (devicesList.value.length > 0) {
+      const currentId = selectedDevice.value?.id || selectedDevice.value?._id
+
+      const target =
+        devicesList.value.find((device) => (device.id || device._id) === currentId) ||
+        devicesList.value[0]
+
+      await selectDevice(target)
+    } else {
+      stopRealtime()
+      selectedDevice.value = null
+      overviewData.value = null
+      lastUpdatedAt.value = null
+    }
+  } catch (error) {
+    console.error('Gagal memuat perangkat:', error)
+    overviewError.value = error.message || 'Gagal memuat perangkat.'
+  } finally {
+    loading.value = false
+  }
+}
+
+// ==============================
+// OVERVIEW
+// ==============================
+
+async function fetchOverview(deviceId) {
+  if (!deviceId || isRefreshingOverview.value) return
+
+  const requestId = ++overviewRequestId
+  isRefreshingOverview.value = true
+
+  try {
+    const response = await api.getDashboardOverview(deviceId)
+
+    if (requestId !== overviewRequestId) return
+
+    const data = unwrapResponse(response)
+
+    overviewData.value = data || {}
+    lastUpdatedAt.value = new Date()
+    overviewError.value = ''
+  } catch (error) {
+    if (requestId !== overviewRequestId) return
+
+    overviewError.value = error.message || 'Gagal mengambil data dashboard.'
+    console.error('Overview error:', error)
+  } finally {
+    if (requestId === overviewRequestId) {
+      isRefreshingOverview.value = false
+    }
+  }
+}
+
+// ==============================
+// SSE PAYLOAD HANDLER
+// ==============================
+
+function updateFromStream(payload) {
+  if (!payload || typeof payload !== 'object') return
+
+  const data = payload.data ?? payload
+
+  const incomingMetrics = data.metrics ?? data.telemetry ?? payload.metrics ?? null
+
+  if (incomingMetrics && typeof incomingMetrics === 'object') {
+    overviewData.value = {
+      ...(overviewData.value || {}),
+      ...data,
+      metrics: incomingMetrics,
+    }
+  } else {
+    // Beberapa implementasi stream mengirim object metrik secara langsung.
+    overviewData.value = {
+      ...(overviewData.value || {}),
+      metrics: data,
+    }
+  }
+
+  // Pertahankan status koneksi jika event menyediakannya.
+  if (data.connection) {
+    overviewData.value = {
+      ...overviewData.value,
+      connection: data.connection,
+    }
+  }
+
+  if (typeof data.online === 'boolean') {
+    overviewData.value.online = data.online
+  }
+
+  lastUpdatedAt.value = new Date()
+  overviewError.value = ''
+}
+
+// ==============================
+// SSE PARSER
+// ==============================
+
+function processSseBlock(block) {
+  const lines = block.split(/\r?\n/)
+  const dataLines = []
+
+  let eventName = 'message'
+
+  for (const line of lines) {
+    if (line.startsWith(':')) continue
+
+    if (line.startsWith('event:')) {
+      eventName = line.slice(6).trim()
+    }
+
+    if (line.startsWith('data:')) {
+      dataLines.push(line.slice(5).trim())
+    }
+  }
+
+  if (dataLines.length === 0) return
+
+  const rawData = dataLines.join('\n')
+
+  try {
+    const payload = JSON.parse(rawData)
+
+    if (eventName === 'metrics' || eventName === 'message') {
+      updateFromStream(payload)
+    }
+  } catch (error) {
+    console.warn('Format event SSE bukan JSON valid:', rawData, error)
+  }
+}
+
+// ==============================
+// SSE CONNECTION
+// ==============================
+
+async function connectDashboardStream(deviceId) {
+  stopRealtime()
+
+  if (!deviceId) return
+
+  streamController = new AbortController()
+  const currentController = streamController
+
+  realtimeStatus.value = 'Menghubungkan'
+
+  try {
+    const response = await api.getDashboardStream(deviceId, currentController.signal, 5)
+
+    if (!response.ok) {
+      const errorBody = await response.text().catch(() => '')
+      throw new Error(`SSE gagal (${response.status}): ${errorBody || response.statusText}`)
+    }
+
+    if (!response.body) {
+      throw new Error('Browser tidak mendukung pembacaan stream.')
+    }
+
+    realtimeStatus.value = 'Terhubung'
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { value, done } = await reader.read()
+
+      if (done) break
+      if (currentController.signal.aborted) break
+
+      buffer += decoder.decode(value, { stream: true })
+
+      const blocks = buffer.split(/\r?\n\r?\n/)
+      buffer = blocks.pop() || ''
+
+      for (const block of blocks) {
+        processSseBlock(block)
+      }
+    }
+
+    if (!currentController.signal.aborted) {
+      throw new Error('Koneksi SSE terputus.')
+    }
+  } catch (error) {
+    if (currentController.signal.aborted) return
+
+    console.error('SSE error:', error)
+    realtimeStatus.value = 'Polling'
+    overviewError.value = 'Stream real-time tidak tersedia. Menggunakan pembaruan berkala.'
+
+    startPolling(deviceId)
+  }
+}
+
+// ==============================
+// POLLING FALLBACK
+// ==============================
+
+function startPolling(deviceId) {
+  stopPolling()
+
+  if (!deviceId) return
+
+  fetchOverview(deviceId)
+
+  refreshTimer = window.setInterval(() => {
+    if (!isRefreshingOverview.value) {
+      fetchOverview(deviceId)
+    }
+  }, 5000)
+}
+
+function stopPolling() {
+  if (refreshTimer) {
+    window.clearInterval(refreshTimer)
+    refreshTimer = null
+  }
+}
+
+function stopRealtime() {
+  stopPolling()
+
+  if (streamController) {
+    streamController.abort()
+    streamController = null
+  }
+
+  realtimeStatus.value = 'Terputus'
+}
+
+// ==============================
+// DEVICE SELECTION
+// ==============================
+
+async function selectDevice(device) {
+  const deviceId = device.id || device._id
+
+  if (!deviceId) {
+    console.error('Device tidak memiliki ID:', device)
+    return
+  }
+
+  stopRealtime()
+
+  overviewRequestId += 1
+  isRefreshingOverview.value = false
+
+  selectedDevice.value = device
+  overviewData.value = null
+  lastUpdatedAt.value = null
+  overviewError.value = ''
+
+  await fetchOverview(deviceId)
+
+  // Setelah overview awal, mulai SSE.
+  connectDashboardStream(deviceId)
+}
+
+// ==============================
+// SENSOR MAPPING
+// ==============================
+
+const metricAliases = {
+  ph: ['ph', 'pH', 'ph_value'],
+  ec: ['ec', 'ec_value'],
+  tds: ['tds', 'tds_value'],
+  water_temp: ['water_temp', 'temp_water', 'suhu_air'],
+  air_temp: ['air_temp', 'temp_air', 'suhu_udara'],
+  humidity: ['humidity', 'hum', 'kelembapan'],
+  waterflow: ['waterflow', 'water_flow'],
+  tank_level: ['tank_level', 'level_tangki'],
+}
+
+function unwrapMetricValue(value) {
+  if (value === undefined || value === null || value === '') {
+    return null
+  }
+
+  if (typeof value === 'object') {
+    return value.value ?? value.val ?? value.reading ?? value.latest ?? null
+  }
+
+  return value
+}
+
+function getMetricValue(metrics, sensor) {
+  if (!metrics || !sensor) return null
+
+  const keys = [sensor.tb_key?.trim(), ...(metricAliases[sensor.type] || [sensor.type])].filter(
+    Boolean,
+  )
+
+  // Coba key yang sudah dikonfigurasi pada sensor.
+  for (const key of keys) {
+    const value = unwrapMetricValue(metrics[key])
+
+    if (value !== null) return value
+  }
+
+  // Jika backend membungkus data dalam objek telemetry/data.
+  const nestedSources = [metrics.latest, metrics.values, metrics.data, metrics.telemetry]
+
+  for (const source of nestedSources) {
+    if (!source || typeof source !== 'object') continue
+
+    for (const key of keys) {
+      const value = unwrapMetricValue(source[key])
+
+      if (value !== null) return value
+    }
+  }
+
+  return null
+}
+
+const sensors = computed(() => {
+  if (!selectedDevice.value) return []
+
+  const deviceSensors = selectedDevice.value.sensors || []
+  const metrics = overviewData.value?.metrics || {}
+
+  return deviceSensors.map((sensor) => {
+    let rawValue = getMetricValue(metrics, sensor)
+    const hasValue = rawValue !== null
+
+    if (hasValue && sensor.type === 'humidity' && !isNaN(rawValue)) {
+      rawValue = Number(rawValue).toFixed(1)
+    }
+
+    return {
+      id: sensor.id || sensor._id || sensor.tb_key || sensor.type,
+      name: sensor.name || sensor.type?.toUpperCase() || 'Sensor',
+      desc: `Tipe: ${sensor.type || '-'} · Key: ${sensor.tb_key || '-'}`,
+      unit: sensor.unit || '',
+      value: hasValue ? `${rawValue} ${sensor.unit || ''}`.trim() : '-',
+      status: hasValue ? 'Data diterima' : 'Menunggu data',
+      calibration: sensor.last_calibrated || '-',
+      nextCal: sensor.next_due_at || '-',
+      urgent: Boolean(sensor.needs_calibration),
+      hasValue,
+    }
+  })
+})
+
+// ==============================
+// CONNECTION STATUS
+// ==============================
+
+const connectionStatus = computed(() => {
+  const online = overviewData.value?.connection?.online ?? overviewData.value?.online
+
+  if (online === true) return 'Terhubung'
+  if (online === false) return 'Terputus'
+
+  return 'Tidak diketahui'
+})
+
+// ==============================
+// ACTUATOR
+// ==============================
+
+const pumpStatus = computed(() => {
+  const actuators = overviewData.value?.actuators || selectedDevice.value?.actuators || []
+
+  const pump = actuators.find(
+    (actuator) => actuator.type === 'pump' || actuator.name?.toLowerCase().includes('pompa'),
+  )
+
+  if (pump) {
+    const state = pump.state ?? pump.status
+
+    if (state === 'on' || pump.is_active === true) return 'Menyala'
+    if (state === 'off' || pump.is_active === false) return 'Mati'
+  }
+
+  const value = overviewData.value?.pump ?? overviewData.value?.water_pump
+
+  if (value === true || value === 'on') return 'Menyala'
+  if (value === false || value === 'off') return 'Mati'
+
+  return 'Tidak diketahui'
+})
+
+// ==============================
+// FILTER & SUMMARY
+// ==============================
+
+const filteredDevices = computed(() => {
+  return devicesList.value.filter((device) => {
+    const nameMatch =
+      device.name?.toLowerCase().includes(searchQuery.value.toLowerCase()) ||
+      (device.tb_device_id || '').toLowerCase().includes(searchQuery.value.toLowerCase())
+
+    const isSelected =
+      (device.id || device._id) === (selectedDevice.value?.id || selectedDevice.value?._id)
+
+    const status = isSelected
+      ? connectionStatus.value
+      : device.online === true
+        ? 'Terhubung'
+        : device.online === false
+          ? 'Terputus'
+          : 'Tidak diketahui'
+
+    const statusMatch = selectedStatus.value === 'Semua Status' || status === selectedStatus.value
+
+    return nameMatch && statusMatch
+  })
+})
+
+const totalDevicesCount = computed(() => devicesList.value.length)
+
+const connectedDevicesCount = computed(
+  () => devicesList.value.filter((device) => device.online === true).length,
+)
+
+const disconnectedDevicesCount = computed(
+  () => devicesList.value.filter((device) => device.online === false).length,
+)
+
+// ==============================
+// ACTIONS
+// ==============================
+
+async function handleRefresh() {
+  if (!selectedDevice.value) {
+    await loadDevices()
+    return
+  }
+
+  await fetchOverview(selectedDevice.value.id || selectedDevice.value._id)
 }
 
 function handleAddDevice() {
-  alert('Form tambah perangkat dibuka.')
+  alert('Pengelolaan dan penambahan perangkat dilakukan melalui Panel Administrator.')
 }
 
-function handleCalibrate() {
-  alert('Memulai kalibrasi EC / TDS...')
+async function handleCalibrate() {
+  if (!selectedDevice.value) {
+    alert('Pilih perangkat terlebih dahulu.')
+    return
+  }
+
+  alert(`Memulai proses kalibrasi untuk perangkat: ${selectedDevice.value.name}`)
 }
+
+// ==============================
+// LIFECYCLE
+// ==============================
+
+onMounted(() => {
+  loadDevices()
+})
+
+onBeforeUnmount(() => {
+  overviewRequestId += 1
+  stopRealtime()
+})
 </script>
 
 <template>
@@ -88,15 +509,11 @@ function handleCalibrate() {
     <!-- Top Header Bar -->
     <div class="top-header">
       <div class="brand-box">
-        <div class="brand-icon">
-          <i class="fa-solid fa-seedling"></i>
-        </div>
+        <div class="brand-icon"><i class="fa-solid fa-seedling"></i></div>
         <span class="brand-title">Tanova</span>
       </div>
       <div class="top-actions">
-        <button class="icon-btn-top" title="Notifikasi">
-          <i class="fa-solid fa-bell"></i>
-        </button>
+        <button class="icon-btn-top" title="Notifikasi"><i class="fa-solid fa-bell"></i></button>
         <div class="profile-avatar-top">BS</div>
       </div>
     </div>
@@ -124,45 +541,42 @@ function handleCalibrate() {
       <div class="metric-card">
         <div>
           <span class="metric-label">Total Perangkat</span>
-          <div class="metric-value">3</div>
-          <span class="metric-sub">di 3 zona</span>
+          <div class="metric-value">{{ totalDevicesCount }}</div>
+          <span class="metric-sub">terdaftar di sistem</span>
         </div>
-        <div class="metric-icon-box green-light">
-          <i class="fa-solid fa-hard-drive"></i>
-        </div>
+        <div class="metric-icon-box green-light"><i class="fa-solid fa-hard-drive"></i></div>
       </div>
 
       <div class="metric-card">
         <div>
           <span class="metric-label">Perangkat Terhubung</span>
-          <div class="metric-value">2</div>
-          <span class="metric-sub text-danger">1 terputus</span>
+          <div class="metric-value">{{ connectedDevicesCount }}</div>
+          <span class="metric-sub text-danger">{{ disconnectedDevicesCount }} terputus</span>
         </div>
-        <div class="metric-icon-box green-light">
-          <i class="fa-solid fa-wifi"></i>
-        </div>
+        <div class="metric-icon-box green-light"><i class="fa-solid fa-wifi"></i></div>
       </div>
 
       <div class="metric-card">
         <div>
           <span class="metric-label">Sensor Aktif</span>
-          <div class="metric-value">8</div>
-          <span class="metric-sub">dari 12 sensor</span>
+          <div class="metric-value">{{ sensors.length }}</div>
+          <span class="metric-sub">terdeteksi di perangkat</span>
         </div>
-        <div class="metric-icon-box green-light">
-          <i class="fa-solid fa-wave-square"></i>
-        </div>
+        <div class="metric-icon-box green-light"><i class="fa-solid fa-wave-square"></i></div>
       </div>
 
       <div class="metric-card">
         <div>
-          <span class="metric-label">Perlu Kalibrasi</span>
-          <div class="metric-value">1</div>
-          <span class="metric-sub text-warning">sensor EC / TDS</span>
+          <span class="metric-label">Mode Sistem</span>
+          <div
+            class="metric-value"
+            style="font-size: 18px; margin-top: 4px; text-transform: uppercase"
+          >
+            {{ selectedDevice?.mode || 'Auto' }}
+          </div>
+          <span class="metric-sub text-warning">pengaturan aktif</span>
         </div>
-        <div class="metric-icon-box green-light">
-          <i class="fa-solid fa-triangle-exclamation"></i>
-        </div>
+        <div class="metric-icon-box green-light"><i class="fa-solid fa-sliders"></i></div>
       </div>
     </div>
 
@@ -171,7 +585,7 @@ function handleCalibrate() {
       <div class="table-header-row">
         <div class="table-title-group">
           <h3 class="section-title">Daftar Perangkat</h3>
-          <span class="badge-count">3 perangkat</span>
+          <span class="badge-count">{{ filteredDevices.length }} perangkat</span>
         </div>
         <div class="table-filter-group">
           <div class="search-box">
@@ -179,7 +593,7 @@ function handleCalibrate() {
             <input
               v-model="searchQuery"
               type="text"
-              placeholder="Cari nama atau ID perangkat"
+              placeholder="Cari nama atau ID"
               class="search-input"
             />
           </div>
@@ -191,89 +605,114 @@ function handleCalibrate() {
         </div>
       </div>
 
-      <!-- Table Wrapper -->
       <div class="table-wrapper">
         <table class="custom-table">
           <thead>
             <tr>
               <th>NAMA PERANGKAT</th>
-              <th>LOKASI</th>
+              <th>THINGSBOARD ID</th>
+              <th>GREENHOUSE</th>
               <th>KONEKSI</th>
               <th>SENSOR</th>
-              <th>SINKRONISASI</th>
               <th class="text-right">TINDAKAN</th>
             </tr>
           </thead>
           <tbody>
+            <tr v-if="loading">
+              <td colspan="6" style="text-align: center; padding: 20px; color: #666">
+                Memuat perangkat...
+              </td>
+            </tr>
+            <tr v-else-if="filteredDevices.length === 0">
+              <td colspan="6" style="text-align: center; padding: 20px; color: #666">
+                Tidak ada perangkat ditemukan.
+              </td>
+            </tr>
             <tr
-              v-for="(dev, index) in devices"
-              :key="index"
-              :class="{ 'row-highlight': dev.statusTag }"
+              v-for="dev in filteredDevices"
+              :key="dev.id || dev._id"
+              @click="selectDevice(dev)"
+              :class="{
+                'row-highlight':
+                  (selectedDevice?.id || selectedDevice?._id) === (dev.id || dev._id),
+              }"
+              style="cursor: pointer"
             >
               <td>
                 <div class="device-name-cell">
-                  <div class="dev-icon-box">
-                    <i class="fa-solid fa-server"></i>
-                  </div>
+                  <div class="dev-icon-box"><i class="fa-solid fa-server"></i></div>
                   <div>
                     <div class="dev-main-text">{{ dev.name }}</div>
                     <div class="dev-sub-text">
-                      {{ dev.code }} <span v-if="dev.statusTag" class="tag-dipilih">· Dipilih</span>
+                      ID: <code>{{ dev.id || dev._id }}</code>
                     </div>
                   </div>
                 </div>
               </td>
               <td>
-                <span class="text-dark">{{ dev.location }}</span>
+                <code>{{ dev.tb_device_id || '-' }}</code>
               </td>
+              <td>{{ dev.greenhouse?.name || dev.greenhouse_name || 'Zona Utama' }}</td>
               <td>
                 <span
                   :class="[
                     'status-pill',
-                    dev.connection === 'Terhubung' ? 'status-connected' : 'status-disconnected',
+                    ((dev.id || dev._id) === (selectedDevice?.id || selectedDevice?._id)
+                      ? connectionStatus
+                      : dev.status || 'Tidak diketahui') === 'Terhubung'
+                      ? 'status-connected'
+                      : 'status-disconnected',
                   ]"
                 >
-                  ● {{ dev.connection }}
+                  ●
+                  {{
+                    (dev.id || dev._id) === (selectedDevice?.id || selectedDevice?._id)
+                      ? connectionStatus
+                      : dev.status || 'Tidak diketahui'
+                  }}
                 </span>
               </td>
-              <td>
-                <span class="text-dark">{{ dev.sensorCount }}</span>
-              </td>
-              <td>
-                <div class="sync-cell">
-                  <i class="fa-solid fa-rotate-right sync-icon-fa"></i> {{ dev.sync }}
-                </div>
-              </td>
+              <td>{{ dev.sensors?.length || 0 }} aktif</td>
               <td class="text-right">
-                <button class="action-icon-btn" title="Pengaturan">
-                  <i class="fa-solid fa-gear"></i>
-                </button>
+                <button class="action-icon-btn"><i class="fa-solid fa-gear"></i></button>
                 <i class="fa-solid fa-chevron-right arrow-right"></i>
               </td>
             </tr>
           </tbody>
         </table>
       </div>
-
-      <div class="table-footer-info">
-        Menampilkan 3 dari 3 perangkat
-        <span class="float-right">1 Oktober 2026 · Pembaruan terakhir: 08:42 WIB</span>
-      </div>
     </div>
 
-    <!-- Bottom Split Grid (Sensor & Kalibrasi) -->
+    <!-- Bottom Split Grid -->
     <div class="bottom-split-grid">
       <!-- Kiri: Sensor & Aktuator -->
       <div class="card-section">
         <div class="sensor-header-row">
           <div>
             <h3 class="section-title">Sensor & Aktuator</h3>
-            <p class="section-desc">Tanova Grove - 1 · Zona 1 · 4 sensor terhubung</p>
+            <p class="section-desc">
+              {{ selectedDevice?.name || 'Pilih perangkat' }} · {{ sensors.length }} sensor
+              terhubung
+            </p>
           </div>
-          <span class="badge-otomatis">● Otomatis</span>
+          <span class="badge-otomatis">● Mode: {{ selectedDevice?.mode || 'auto' }}</span>
         </div>
+        <p class="section-desc">
+          Status realtime:
+          <strong>{{ realtimeStatus }}</strong>
+        </p>
 
-        <!-- Tabel Sensor -->
+        <p v-if="lastUpdatedAt" class="section-desc">
+          Sinkronisasi terakhir:
+          {{ lastUpdatedAt.toLocaleTimeString('id-ID') }}
+        </p>
+
+        <p v-if="overviewError" class="section-desc text-danger">
+          {{ overviewError }}
+        </p>
+        <p v-if="overviewError" class="section-desc text-danger">{{ overviewError }}</p>
+        <div class="table-wrapper mb-16"></div>
+
         <div class="table-wrapper mb-16">
           <table class="custom-table sensor-table">
             <thead>
@@ -286,6 +725,11 @@ function handleCalibrate() {
               </tr>
             </thead>
             <tbody>
+              <tr v-if="sensors.length === 0">
+                <td colspan="5" style="text-align: center; color: #777; padding: 15px">
+                  Belum ada sensor terdaftar pada perangkat ini.
+                </td>
+              </tr>
               <tr v-for="(sensor, idx) in sensors" :key="idx">
                 <td>
                   <div class="sensor-name-cell">
@@ -300,17 +744,19 @@ function handleCalibrate() {
                   <span class="sensor-value-bold">{{ sensor.value }}</span>
                 </td>
                 <td>
-                  <span class="status-pill status-connected">● {{ sensor.status }}</span>
+                  <span
+                    :class="[
+                      'status-pill',
+                      sensor.hasValue ? 'status-connected' : 'status-disconnected',
+                    ]"
+                    >● {{ sensor.status }}</span
+                  >
                 </td>
                 <td>
                   <div class="cal-date-text">{{ sensor.calibration }}</div>
-                  <div :class="['cal-next-text', sensor.urgent ? 'text-warning-bold' : '']">
-                    {{ sensor.nextCal }}
-                  </div>
+                  <div class="cal-next-text">{{ sensor.nextCal }}</div>
                 </td>
-                <td class="text-right">
-                  <button class="btn-atur">Atur</button>
-                </td>
+                <td class="text-right"><button class="btn-atur">Atur</button></td>
               </tr>
             </tbody>
           </table>
@@ -321,64 +767,27 @@ function handleCalibrate() {
           <div class="actuator-left">
             <i class="fa-solid fa-bolt pump-icon-fa"></i>
             <span class="actuator-text"
-              ><strong>Pompa Air</strong> Dikendalikan otomatis oleh sistem</span
+              ><strong>Aktuator / Pompa</strong> Status terkini dari sistem</span
             >
           </div>
-          <span class="badge-menyala"
-            >● Menyala <i class="fa-solid fa-gear" style="font-size: 10px; margin-left: 2px"></i
-          ></span>
+          <span class="badge-menyala">● {{ pumpStatus }}</span>
         </div>
       </div>
 
-      <!-- Kanan: Kalibrasi Sensor -->
+      <!-- Kanan: Kalibrasi & Info -->
       <div class="card-section">
-        <h3 class="section-title calibration-title">Kalibrasi Sensor</h3>
-
-        <!-- Warning Box -->
-        <div class="cal-warning-box">
-          <div class="warning-icon-box"><i class="fa-solid fa-triangle-exclamation"></i></div>
-          <div>
-            <div class="warning-title">EC / TDS perlu kalibrasi</div>
-            <div class="warning-desc">
-              Jadwal kalibrasi hari ini. Gunakan larutan standar 1.413 mS/cm agar hasil tetap
-              akurat.
-            </div>
-          </div>
-        </div>
+        <h3 class="section-title calibration-title">Kalibrasi & Kontrol</h3>
 
         <button @click="handleCalibrate" class="btn-primary full-width mb-24">
-          <i class="fa-solid fa-bolt"></i> Mulai Kalibrasi EC / TDS
+          <i class="fa-solid fa-bolt"></i> Mulai Kalibrasi Sensor
         </button>
 
         <div class="history-header">
-          <span class="history-title-label">Kalibrasi Terbaru</span>
-          <a href="#" class="lihat-semua-link" @click.prevent>Lihat semua</a>
+          <span class="history-title-label">Informasi Perangkat</span>
         </div>
-
-        <!-- History Items -->
-        <div class="history-item">
-          <span class="check-icon-circle"
-            ><i class="fa-solid fa-check" style="font-size: 10px"></i
-          ></span>
-          <div class="history-content">
-            <div class="history-name">Sensor pH · Berhasil</div>
-            <div class="history-time">9 Sep 2026 · 16:20 WIB</div>
-          </div>
-        </div>
-
-        <div class="history-item">
-          <span class="check-icon-circle"
-            ><i class="fa-solid fa-check" style="font-size: 10px"></i
-          ></span>
-          <div class="history-content">
-            <div class="history-name">Sensor Suhu Air · Berhasil</div>
-            <div class="history-time">3 Sep 2026 · 09:15 WIB</div>
-          </div>
-        </div>
-
-        <div class="history-footer-note">
-          <span class="info-circle-sm">i</span> Lakukan kalibrasi rutin setiap 30 hari atau setelah
-          penggantian sensor.
+        <div class="history-footer-note" style="margin-top: 8px">
+          <span class="info-circle-sm">i</span> Zona: {{ selectedDevice?.zone || '-' }}<br />
+          Catatan: {{ selectedDevice?.notes || 'Tidak ada catatan khusus.' }}
         </div>
       </div>
     </div>
@@ -393,8 +802,6 @@ function handleCalibrate() {
   min-height: 100vh;
   box-sizing: border-box;
 }
-
-/* Top Header */
 .top-header {
   display: flex;
   justify-content: space-between;
@@ -405,13 +812,11 @@ function handleCalibrate() {
   border-radius: 12px;
   margin-bottom: 24px;
 }
-
 .brand-box {
   display: flex;
   align-items: center;
   gap: 12px;
 }
-
 .brand-icon {
   width: 36px;
   height: 36px;
@@ -423,19 +828,16 @@ function handleCalibrate() {
   justify-content: center;
   font-size: 16px;
 }
-
 .brand-title {
   font-size: 18px;
   font-weight: bold;
   color: #222;
 }
-
 .top-actions {
   display: flex;
   align-items: center;
   gap: 16px;
 }
-
 .icon-btn-top {
   width: 36px;
   height: 36px;
@@ -448,7 +850,6 @@ function handleCalibrate() {
   cursor: pointer;
   color: #555;
 }
-
 .profile-avatar-top {
   width: 36px;
   height: 36px;
@@ -461,33 +862,27 @@ function handleCalibrate() {
   align-items: center;
   justify-content: center;
 }
-
-/* Header Section */
 .header-section {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
   margin-bottom: 24px;
 }
-
 .page-title {
   font-size: 24px;
   font-weight: bold;
   color: #111;
   margin: 0 0 4px 0;
 }
-
 .page-subtitle {
   font-size: 14px;
   color: #666;
   margin: 0;
 }
-
 .header-buttons {
   display: flex;
   gap: 12px;
 }
-
 .btn-secondary {
   padding: 10px 18px;
   background: #fff;
@@ -501,11 +896,9 @@ function handleCalibrate() {
   align-items: center;
   gap: 8px;
 }
-
 .btn-secondary:hover {
   background: #f5f5f5;
 }
-
 .btn-primary {
   padding: 10px 20px;
   background: #93ba39;
@@ -519,24 +912,19 @@ function handleCalibrate() {
   align-items: center;
   gap: 8px;
 }
-
 .btn-primary:hover {
   background: #82a532;
 }
-
 .full-width {
   width: 100%;
   justify-content: center;
 }
-
-/* Metrics Grid */
 .metrics-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 20px;
   margin-bottom: 24px;
 }
-
 .metric-card {
   background: #fff;
   border: 1px solid #e0e0e0;
@@ -546,36 +934,30 @@ function handleCalibrate() {
   justify-content: space-between;
   align-items: flex-start;
 }
-
 .metric-label {
   font-size: 13px;
   color: #666;
   display: block;
   margin-bottom: 6px;
 }
-
 .metric-value {
   font-size: 24px;
   font-weight: bold;
   color: #111;
   margin-bottom: 2px;
 }
-
 .metric-sub {
   font-size: 12px;
   color: #555;
 }
-
 .text-danger {
   color: #d9534f;
   font-weight: 500;
 }
-
 .text-warning {
   color: #f0ad4e;
   font-weight: 500;
 }
-
 .metric-icon-box {
   width: 36px;
   height: 36px;
@@ -587,57 +969,43 @@ function handleCalibrate() {
   justify-content: center;
   font-size: 15px;
 }
-
-/* Card Section */
 .card-section {
   background: #fff;
   border: 1px solid #e0e0e0;
   border-radius: 12px;
   padding: 24px;
 }
-
 .mb-24 {
   margin-bottom: 24px;
 }
-
 .mb-16 {
   margin-bottom: 16px;
 }
-
-.mb-4 {
-  margin-bottom: 4px;
-}
-
 .table-header-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 16px;
 }
-
 .table-title-group {
   display: flex;
   align-items: center;
   gap: 12px;
 }
-
 .section-title {
   font-size: 16px;
   font-weight: bold;
   color: #111;
   margin: 0;
 }
-
 .section-desc {
   font-size: 13px;
   color: #666;
   margin: 2px 0 0 0;
 }
-
 .calibration-title {
   margin-bottom: 16px !important;
 }
-
 .badge-count {
   background: #f1f5ee;
   color: #555;
@@ -646,18 +1014,15 @@ function handleCalibrate() {
   border-radius: 12px;
   font-weight: 500;
 }
-
 .table-filter-group {
   display: flex;
   gap: 12px;
 }
-
 .search-box {
   position: relative;
   display: flex;
   align-items: center;
 }
-
 .search-input {
   padding: 8px 12px 8px 32px;
   border: 1px solid #ccc;
@@ -666,19 +1031,16 @@ function handleCalibrate() {
   width: 220px;
   background: #fff;
 }
-
 .search-input:focus {
   border-color: #93ba39;
   outline: none;
 }
-
 .search-icon-fa {
   position: absolute;
   left: 10px;
   color: #888;
   font-size: 12px;
 }
-
 .filter-select {
   padding: 8px 12px;
   border: 1px solid #ccc;
@@ -687,19 +1049,15 @@ function handleCalibrate() {
   background: #fff;
   color: #333;
 }
-
-/* Tables */
 .table-wrapper {
   overflow-x: auto;
 }
-
 .custom-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
   text-align: left;
 }
-
 .custom-table th {
   color: #777;
   font-weight: 600;
@@ -709,24 +1067,17 @@ function handleCalibrate() {
   border-bottom: 1px solid #eee;
   background: #fafafa;
 }
-
 .custom-table td {
   padding: 14px 12px;
   border-bottom: 1px solid #f0f0f0;
   vertical-align: middle;
 }
-
-.row-highlight {
-  background: #fcfef9;
-}
-
 .device-name-cell,
 .sensor-name-cell {
   display: flex;
   align-items: center;
   gap: 12px;
 }
-
 .dev-icon-box {
   width: 36px;
   height: 36px;
@@ -738,27 +1089,18 @@ function handleCalibrate() {
   justify-content: center;
   font-size: 14px;
 }
-
 .dev-main-text {
   font-weight: bold;
   color: #222;
 }
-
 .dev-sub-text {
   font-size: 12px;
   color: #666;
   margin-top: 2px;
 }
-
-.tag-dipilih {
-  color: #558b2f;
-  font-weight: 500;
-}
-
 .text-dark {
   color: #333;
 }
-
 .status-pill {
   padding: 4px 10px;
   border-radius: 12px;
@@ -766,33 +1108,17 @@ function handleCalibrate() {
   font-weight: 500;
   display: inline-block;
 }
-
 .status-connected {
   background: #e5f2cc;
   color: #558b2f;
 }
-
 .status-disconnected {
   background: #fde8e8;
   color: #d9534f;
 }
-
-.sync-cell {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: #555;
-}
-
-.sync-icon-fa {
-  color: #888;
-  font-size: 11px;
-}
-
 .text-right {
   text-align: right;
 }
-
 .action-icon-btn {
   background: none;
   border: none;
@@ -801,37 +1127,22 @@ function handleCalibrate() {
   color: #666;
   padding: 4px;
 }
-
 .arrow-right {
   color: #aaa;
   font-size: 11px;
   margin-left: 8px;
 }
-
-.table-footer-info {
-  font-size: 12px;
-  color: #666;
-  margin-top: 16px;
-}
-
-.float-right {
-  float: right;
-}
-
-/* Bottom Split Grid */
 .bottom-split-grid {
   display: grid;
   grid-template-columns: 2fr 1fr;
   gap: 24px;
 }
-
 .sensor-header-row {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
   margin-bottom: 16px;
 }
-
 .badge-otomatis {
   background: #e5f2cc;
   color: #558b2f;
@@ -840,35 +1151,25 @@ function handleCalibrate() {
   border-radius: 12px;
   font-weight: 500;
 }
-
 .sensor-dot-icon {
   width: 8px;
   height: 8px;
   background: #93ba39;
   border-radius: 50%;
 }
-
 .sensor-value-bold {
   font-weight: bold;
   color: #111;
 }
-
 .cal-date-text {
   font-size: 12px;
   color: #333;
 }
-
 .cal-next-text {
   font-size: 11px;
   color: #666;
   margin-top: 1px;
 }
-
-.text-warning-bold {
-  color: #d9822b;
-  font-weight: 500;
-}
-
 .btn-atur {
   padding: 6px 14px;
   background: #fff;
@@ -878,12 +1179,9 @@ function handleCalibrate() {
   cursor: pointer;
   color: #333;
 }
-
 .btn-atur:hover {
   background: #f5f5f5;
 }
-
-/* Actuator Bar */
 .actuator-bar {
   background: #f4f8ed;
   border: 1px solid #d4edda;
@@ -893,7 +1191,6 @@ function handleCalibrate() {
   justify-content: space-between;
   align-items: center;
 }
-
 .actuator-left {
   display: flex;
   align-items: center;
@@ -901,11 +1198,9 @@ function handleCalibrate() {
   font-size: 13px;
   color: #333;
 }
-
 .pump-icon-fa {
   color: #93ba39;
 }
-
 .badge-menyala {
   background: #e5f2cc;
   color: #558b2f;
@@ -914,103 +1209,22 @@ function handleCalibrate() {
   border-radius: 12px;
   font-weight: 500;
 }
-
-/* Kalibrasi Sensor Panel */
-.cal-warning-box {
-  background: #fdfae5;
-  border: 1px solid #fae199;
-  padding: 14px;
-  border-radius: 8px;
-  display: flex;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-
-.warning-icon-box {
-  font-size: 16px;
-  color: #f0ad4e;
-}
-
-.warning-title {
-  font-size: 13px;
-  font-weight: bold;
-  color: #8a6d3b;
-  margin-bottom: 2px;
-}
-
-.warning-desc {
-  font-size: 12px;
-  color: #8a6d3b;
-  line-height: 1.4;
-}
-
 .history-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 12px;
 }
-
 .history-title-label {
   font-size: 13px;
   font-weight: bold;
   color: #333;
 }
-
-.lihat-semua-link {
-  font-size: 12px;
-  color: #93ba39;
-  text-decoration: none;
-}
-
-.lihat-semua-link:hover {
-  text-decoration: underline;
-}
-
-.history-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  margin-bottom: 12px;
-  border-bottom: 1px solid #f5f5f5;
-  padding-bottom: 10px;
-}
-
-.check-icon-circle {
-  width: 18px;
-  height: 18px;
-  background: #e5f2cc;
-  color: #558b2f;
-  border-radius: 50%;
-  font-size: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-.history-name {
-  font-size: 13px;
-  font-weight: 500;
-  color: #222;
-}
-
-.history-time {
-  font-size: 11px;
-  color: #666;
-  margin-top: 1px;
-}
-
 .history-footer-note {
-  margin-top: 16px;
   font-size: 11px;
   color: #666;
-  display: flex;
-  gap: 6px;
-  align-items: flex-start;
   line-height: 1.4;
 }
-
 .info-circle-sm {
   width: 12px;
   height: 12px;
@@ -1021,6 +1235,5 @@ function handleCalibrate() {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
 }
 </style>

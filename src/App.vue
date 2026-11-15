@@ -1,15 +1,40 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import SignInView from './views/SignInView.vue'
 import AppLayout from './components/AppLayout.vue'
 import DashboardView from './views/DashboardView.vue'
 import AiView from './views/AiView.vue'
 import TanovaDeviceView from './components/TanovaDeviceView.vue'
+import AdminView from './views/AdminView.vue'
 
 const isLoggedIn = ref(false)
+const currentUser = ref(null)
 const page = ref('dashboard') // 'dashboard' | 'device' | 'ai' | 'profile'
 
-function logout() {
+onMounted(() => {
+  const token = localStorage.getItem('tanova_token')
+  const savedUser = localStorage.getItem('tanova_user')
+
+  if (token && savedUser) {
+    try {
+      currentUser.value = JSON.parse(savedUser)
+      isLoggedIn.value = true
+    } catch {
+      handleLogout()
+    }
+  }
+})
+
+function handleLoginSuccess(profile) {
+  currentUser.value = profile
+  isLoggedIn.value = true
+}
+
+function handleLogout() {
+  localStorage.removeItem('tanova_token')
+  localStorage.removeItem('tanova_refresh_token')
+  localStorage.removeItem('tanova_user')
+  currentUser.value = null
   isLoggedIn.value = false
   page.value = 'dashboard'
 }
@@ -22,7 +47,9 @@ const activeMenu = computed(() => (page.value === 'profile' ? 'dashboard' : page
 </script>
 
 <template>
-  <SignInView v-if="!isLoggedIn" @submit="isLoggedIn = true" />
+  <SignInView v-if="!isLoggedIn" @login-success="handleLoginSuccess" />
+
+  <AdminView v-else-if="currentUser?.role === 'admin'" @logout="handleLogout" />
 
   <AppLayout
     v-else
@@ -33,13 +60,11 @@ const activeMenu = computed(() => (page.value === 'profile' ? 'dashboard' : page
     :dashboard-label="page === 'ai' ? 'Dasbor' : 'Dashboard'"
     @navigate="page = $event"
     @edit-profile="page = 'profile'"
-    @logout="logout"
+    @logout="handleLogout"
   >
     <DashboardView v-if="page === 'dashboard'" :mode="mode" />
     <AiView v-else-if="page === 'ai'" />
-    <!-- Menampilkan komponen TanovaDeviceView pada halaman device -->
     <TanovaDeviceView v-else-if="page === 'device'" />
-    <!-- Halaman default / fallback jika halaman lain dipilih -->
     <p v-else class="placeholder">
       {{ page === 'profile' ? 'Profil Pengguna' : 'Halaman tidak ditemukan' }} 
     </p>
