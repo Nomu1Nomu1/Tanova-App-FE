@@ -1,17 +1,35 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import Icon from '../components/Icon.vue'
+import { loadAiOverview } from '../services/aiService.js'
 import foto1 from '../assets/image/1.jpg'
 import foto1a from '../assets/image/1a.jpg'
 import foto1b from '../assets/image/1b.jpg'
 
 /* ---------- Grafik prediksi pertumbuhan ---------- */
-const days = ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min']
-const thisWeek = [0.35, 0.4, 0.74, 0.58, 0.57, 0.73, 0.87] // 0 = Rendah, 1 = Tinggi
-const lastWeek = [0.35, 0.43, 0.38, 0.5, 0.2, 0.4, 0.6]
+// Data contoh (dipakai sampai data dari server masuk)
+const sampleGrowth = {
+  days: ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'],
+  thisWeek: [0.35, 0.4, 0.74, 0.58, 0.57, 0.73, 0.87], // 0 = Rendah, 1 = Tinggi
+  lastWeek: [0.35, 0.43, 0.38, 0.5, 0.2, 0.4, 0.6],
+}
+const growthData = ref(sampleGrowth)
 
+// Lebar grafik mengikuti lebar kartu, supaya tulisan sumbu tidak ikut membesar
+const chartWrap = ref(null)
+const chartW = ref(470)
+let resizeObs
+onMounted(() => {
+  if (!chartWrap.value || typeof ResizeObserver === 'undefined') return
+  resizeObs = new ResizeObserver(([entry]) => {
+    chartW.value = Math.max(320, Math.round(entry.contentRect.width))
+  })
+  resizeObs.observe(chartWrap.value)
+})
+onBeforeUnmount(() => resizeObs?.disconnect())
+
+const CHART_H = 128
 const X0 = 50
-const X1 = 450
 const Y_TOP = 14
 const Y_BOTTOM = 98
 const yLevels = [
@@ -19,9 +37,6 @@ const yLevels = [
   { label: 'Sedang', y: (Y_TOP + Y_BOTTOM) / 2 },
   { label: 'Rendah', y: Y_BOTTOM },
 ]
-
-const xs = days.map((_, i) => X0 + ((X1 - X0) / (days.length - 1)) * i)
-const toPoints = (vals) => vals.map((v, i) => ({ x: xs[i], y: Y_BOTTOM - v * (Y_BOTTOM - Y_TOP) }))
 
 // Kurva halus (Catmull-Rom -> Bezier)
 function smooth(pts) {
@@ -40,9 +55,24 @@ function smooth(pts) {
   return d
 }
 
-const thisLine = smooth(toPoints(thisWeek))
-const lastLine = smooth(toPoints(lastWeek))
-const thisArea = `${thisLine} L${X1},${Y_BOTTOM} L${X0},${Y_BOTTOM} Z`
+const chart = computed(() => {
+  const { days, thisWeek, lastWeek } = growthData.value
+  const n = days.length
+  const width = chartW.value
+  const x1 = width - 24
+  const xs = days.map((_, i) => X0 + ((x1 - X0) / Math.max(1, n - 1)) * i)
+  const toPoints = (vals) =>
+    vals.slice(0, n).map((v, i) => ({ x: xs[i], y: Y_BOTTOM - v * (Y_BOTTOM - Y_TOP) }))
+  const thisLine = smooth(toPoints(thisWeek))
+  return {
+    width,
+    days,
+    xs,
+    thisLine,
+    lastLine: lastWeek ? smooth(toPoints(lastWeek)) : '',
+    thisArea: `${thisLine} L${xs[n - 1]},${Y_BOTTOM} L${xs[0]},${Y_BOTTOM} Z`,
+  }
+})
 
 /* ---------- Prediksi kebutuhan ---------- */
 const needs = [
@@ -51,8 +81,9 @@ const needs = [
 ]
 
 /* ---------- Prediksi hama & penyakit ---------- */
-const risks = [
-  {
+// Data contoh (dipakai sampai data dari server masuk)
+const sampleRisks = {
+  pest: {
     title: 'Prediksi Hama',
     icon: 'bug',
     found: 'Terdeteksi: Kutu Daun',
@@ -60,7 +91,7 @@ const risks = [
     zone: 'Zona A – Tower 2',
     advice: 'Pisahkan tanaman terdampak, bersihkan kutu pada daun, lalu gunakan pestisida nabati sesuai dosis.',
   },
-  {
+  disease: {
     title: 'Prediksi Penyakit',
     icon: 'sprout',
     found: 'Terdeteksi: Busuk Akar',
@@ -68,7 +99,12 @@ const risks = [
     zone: 'Zona A – Tower 2',
     advice: 'Periksa akar dan buang bagian yang membusuk. Bersihkan instalasi serta tingkatkan aerasi larutan nutrisi.',
   },
-]
+}
+const risksData = ref(sampleRisks)
+const riskCards = computed(() => [
+  risksData.value.pest ?? { title: 'Prediksi Hama', icon: 'bug', found: '' },
+  risksData.value.disease ?? { title: 'Prediksi Penyakit', icon: 'sprout', found: '' },
+])
 
 /* ---------- Galeri gambar (data contoh) ---------- */
 const zones = ['Zona A · Tower 2', 'Zona A · Tower 2', 'Zona A · Tower 1', 'Zona B · Tower 1', 'Zona B · Tower 2', 'Zona C · Tower 1']
@@ -81,11 +117,11 @@ const results = [
   { name: 'Tip Burn', ok: false, conf: 87 },
 ]
 
-// Sementara dari file lokal. Nanti diganti URL foto dari backend.
+// Foto contoh dari file lokal. Data dari server memakai foto dari server.
 const galleryPhotos = [foto1, foto1a, foto1b]
 
-// 24 gambar, 8 per hari (10, 9, 8 Okt), urutan terbaru dulu
-const shots = Array.from({ length: 24 }, (_, i) => {
+// 24 gambar contoh, 8 per hari (10, 9, 8 Okt), urutan terbaru dulu
+const sampleShots = Array.from({ length: 24 }, (_, i) => {
   const r = results[(i * 5 + 1) % results.length]
   return {
     id: i,
@@ -93,9 +129,32 @@ const shots = Array.from({ length: 24 }, (_, i) => {
     ...r,
     stamp: `${10 - Math.floor(i / 8)} Okt 2026 · ${String(15 - (i % 8)).padStart(2, '0')}:20 WIB`,
     hue: 92 + ((i * 7) % 24),
-    // Foto galeri: 1, 1a, 1b di src/assets/image (dipakai berulang)
     photo: galleryPhotos[i % galleryPhotos.length],
   }
+})
+const shotsData = ref(sampleShots)
+
+/* ---------- Memuat data dari server ---------- */
+const loading = ref(true)
+const notice = ref('')
+
+onMounted(async () => {
+  const { growth, shots, risks, errors } = await loadAiOverview()
+
+  if (growth) growthData.value = growth
+  if (shots.length) {
+    shotsData.value = shots.map((s, i) => ({ ...s, hue: 92 + ((i * 7) % 24) }))
+    risksData.value = risks
+  }
+
+  if (errors.some((e) => e.status === 401)) {
+    notice.value = 'Belum login ke server, jadi halaman ini menampilkan data contoh.'
+  } else if (errors.length) {
+    notice.value = `${errors[0].message} Halaman ini menampilkan data contoh.`
+  } else if (!growth || !shots.length) {
+    notice.value = 'Server belum mengirim data untuk sebagian kartu, kartu itu memakai data contoh.'
+  }
+  loading.value = false
 })
 
 const query = ref('')
@@ -105,7 +164,7 @@ const visible = ref(6)
 
 const filtered = computed(() => {
   const q = query.value.trim().toLowerCase()
-  const list = shots.filter((s) => {
+  const list = shotsData.value.filter((s) => {
     const matchText = !q || s.zone.toLowerCase().includes(q) || s.name.toLowerCase().includes(q)
     const matchResult =
       resultFilter.value === 'all' || (resultFilter.value === 'ok' ? s.ok : !s.ok)
@@ -131,6 +190,9 @@ const shown = computed(() => filtered.value.slice(0, visible.value))
       </div>
     </section>
 
+    <p v-if="loading" class="notice notice--load" role="status">Memuat data dari server…</p>
+    <p v-else-if="notice" class="notice" role="status">{{ notice }}</p>
+
     <!-- Baris 1: grafik + kebutuhan -->
     <section class="row row--chart">
       <article class="card panel">
@@ -142,25 +204,28 @@ const shown = computed(() => filtered.value.slice(0, visible.value))
           <span class="pill pill--soft pill--trend">Tren meningkat</span>
         </div>
 
+        <div ref="chartWrap" class="chart-wrap">
         <svg
           class="chart"
-          viewBox="0 0 470 128"
+          :viewBox="`0 0 ${chart.width} ${CHART_H}`"
+          :height="CHART_H"
           role="img"
           aria-label="Grafik prediksi pertumbuhan Selada Romaine, tren meningkat sepanjang minggu"
         >
           <g v-for="l in yLevels" :key="l.label">
-            <line :x1="X0 - 6" :x2="X1 + 20" :y1="l.y" :y2="l.y" class="grid" />
+            <line :x1="X0 - 6" :x2="chart.width - 4" :y1="l.y" :y2="l.y" class="grid" />
             <text x="0" :y="l.y + 3" class="axis">{{ l.label }}</text>
           </g>
-          <path :d="thisArea" class="area" />
-          <path :d="lastLine" class="line line--last" />
-          <path :d="thisLine" class="line line--this" />
-          <text v-for="(d, i) in days" :key="d" :x="xs[i]" y="120" text-anchor="middle" class="axis">{{ d }}</text>
+          <path :d="chart.thisArea" class="area" />
+          <path v-if="chart.lastLine" :d="chart.lastLine" class="line line--last" />
+          <path :d="chart.thisLine" class="line line--this" />
+          <text v-for="(d, i) in chart.days" :key="i" :x="chart.xs[i]" y="120" text-anchor="middle" class="axis">{{ d }}</text>
         </svg>
+        </div>
 
         <div class="legend">
           <span><i class="sw sw--this"></i>Prediksi minggu ini</span>
-          <span><i class="sw sw--last"></i>Minggu sebelumnya</span>
+          <span v-if="chart.lastLine"><i class="sw sw--last"></i>Minggu sebelumnya</span>
         </div>
       </article>
 
@@ -181,21 +246,24 @@ const shown = computed(() => filtered.value.slice(0, visible.value))
 
     <!-- Baris 2: hama & penyakit -->
     <section class="risks">
-      <article v-for="r in risks" :key="r.title" class="card risk">
+      <article v-for="r in riskCards" :key="r.title" class="card risk">
         <div class="risk__head">
           <h3><Icon :name="r.icon" />{{ r.title }}</h3>
           <small>Analisis terakhir</small>
         </div>
-        <div class="found">
-          <span>{{ r.found }}</span>
-          <Icon name="warnFill" />
-        </div>
-        <dl class="meta">
-          <div><dt>Waktu</dt><dd>{{ r.time }}</dd></div>
-          <div><dt>Zona</dt><dd>{{ r.zone }}</dd></div>
-        </dl>
-        <h4>Rekomendasi Penyelesaian</h4>
-        <p class="advice">{{ r.advice }}</p>
+        <template v-if="r.found">
+          <div class="found">
+            <span>{{ r.found }}</span>
+            <Icon name="warnFill" />
+          </div>
+          <dl class="meta">
+            <div><dt>Waktu</dt><dd>{{ r.time }}</dd></div>
+            <div><dt>Zona</dt><dd>{{ r.zone }}</dd></div>
+          </dl>
+          <h4>Rekomendasi Penyelesaian</h4>
+          <p class="advice">{{ r.advice }}</p>
+        </template>
+        <p v-else class="advice">Belum ada deteksi terbaru.</p>
       </article>
     </section>
 
@@ -243,7 +311,7 @@ const shown = computed(() => filtered.value.slice(0, visible.value))
               <b>{{ s.name }}</b>
               <small>{{ s.stamp }}</small>
             </div>
-            <span class="tag" :class="s.ok ? 'tag--ok' : 'tag--bad'">{{ s.conf }}%</span>
+            <span v-if="s.conf != null" class="tag" :class="s.ok ? 'tag--ok' : 'tag--bad'">{{ s.conf }}%</span>
           </div>
         </article>
       </div>
@@ -263,7 +331,22 @@ const shown = computed(() => filtered.value.slice(0, visible.value))
 
 <style scoped>
 .head p {
-  max-width: 60ch;
+  max-width: none;
+}
+
+.notice {
+  margin: 0;
+  padding: 10px 14px;
+  font-size: 11px;
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #f3dc8f;
+  border-radius: 8px;
+}
+.notice--load {
+  color: var(--muted);
+  background: var(--green-50);
+  border-color: var(--line);
 }
 
 .row.row--chart {
@@ -286,11 +369,13 @@ const shown = computed(() => filtered.value.slice(0, visible.value))
 }
 
 /* ---------- Grafik ---------- */
+.chart-wrap {
+  width: 100%;
+  margin-top: 4px;
+}
 .chart {
   display: block;
   width: 100%;
-  height: auto;
-  margin-top: 4px;
 }
 .grid {
   stroke: #e8ecdc;
@@ -635,7 +720,7 @@ button.tool:hover,
     grid-template-columns: 1fr;
   }
 }
-@media (max-width: 520px) {git status
+@media (max-width: 520px) {
   .shots {
     grid-template-columns: 1fr;
   }
