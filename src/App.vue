@@ -4,6 +4,7 @@ import SignInView from './views/SignInView.vue'
 import AppLayout from './components/AppLayout.vue'
 import DashboardView from './views/DashboardView.vue'
 import AiView from './views/AiView.vue'
+import TanovaDeviceView from './components/TanovaDeviceView.vue'
 
 const isLoggedIn = ref(false)
 const page = ref('dashboard') // 'dashboard' | 'device' | 'ai' | 'profile'
@@ -36,9 +37,11 @@ const activeMenu = computed(() => (page.value === 'profile' ? 'dashboard' : page
   >
     <DashboardView v-if="page === 'dashboard'" :mode="mode" />
     <AiView v-else-if="page === 'ai'" />
-    <!-- Halaman anggota lain: ganti blok ini dengan komponen mereka setelah di-merge -->
+    <!-- Menampilkan komponen TanovaDeviceView pada halaman device -->
+    <TanovaDeviceView v-else-if="page === 'device'" />
+    <!-- Halaman default / fallback jika halaman lain dipilih -->
     <p v-else class="placeholder">
-      {{ page === 'device' ? 'None' : 'None' }} 
+      {{ page === 'profile' ? 'Profil Pengguna' : 'Halaman tidak ditemukan' }} 
     </p>
   </AppLayout>
 </template>
