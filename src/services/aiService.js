@@ -10,7 +10,7 @@
 // didokumentasikan ("Default Response"), jadi aiMappers.js masih memakai perkiraan nama field.
 import { mapDiagnoses, mapGrowth, mapRisks } from './aiMappers.js'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'https://tanova-backend.onrender.com/api/v1'
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
 const TOKEN_KEY = 'tanova_token'
 const API_ORIGIN = new URL(API_BASE_URL, window.location.origin).origin
 
