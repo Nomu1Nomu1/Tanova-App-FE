@@ -2,6 +2,14 @@
 import { ref, onMounted } from 'vue'
 import { api } from '../services/api'
 
+const emit = defineEmits(['logout'])
+
+function handleSignOut() {
+  if (confirm('Apakah Anda yakin ingin keluar dari Panel Administrator?')) {
+    emit('logout')
+  }
+}
+
 const activeTab = ref('devices')
 
 // State data dari backend
@@ -428,8 +436,13 @@ async function handleDeleteUser(usr) {
           Kelola perangkat, greenhouse, dan hak akses akun pengguna sistem.
         </p>
       </div>
-      <div class="admin-badge">
-        <span><i class="fa-solid fa-user-shield"></i> Admin Mode</span>
+      <div class="admin-header-right">
+        <div class="admin-badge">
+          <span><i class="fa-solid fa-user-shield"></i> Admin Mode</span>
+        </div>
+        <button @click="handleSignOut" class="btn-signout-admin" title="Keluar Akun">
+          <i class="fa-solid fa-right-from-bracket"></i> Sign Out
+        </button>
       </div>
     </div>
 
@@ -1461,5 +1474,32 @@ async function handleDeleteUser(usr) {
 
 .mb-0 {
   margin-bottom: 0;
+}
+
+.admin-header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.btn-signout-admin {
+  padding: 6px 14px;
+  background: #fde8e8;
+  color: #d9534f;
+  border: 1px solid #f5c6cb;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s;
+}
+
+.btn-signout-admin:hover {
+  background: #d9534f;
+  color: #fff;
+  border-color: #d9534f;
 }
 </style>
