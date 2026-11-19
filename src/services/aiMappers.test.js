@@ -52,12 +52,12 @@ test('mapDiagnosis: field snake_case, confidence 0..1, foto relatif, waktu WIB',
       created_at: '2026-10-10T07:20:00Z',
       recommendation: 'Pisahkan tanaman terdampak.',
     },
-    'https://tanova-backend.onrender.com',
+    import.meta.env.VITE_API_BASE_URL,
   )
   assert.equal(d.id, 'abc')
   assert.equal(d.name, 'Kutu Daun')
   assert.equal(d.conf, 87)
-  assert.equal(d.photo, 'https://tanova-backend.onrender.com/uploads/a.jpg')
+  assert.equal(d.photo, `${import.meta.env.VITE_API_BASE_URL}/uploads/a.jpg`)
   assert.equal(d.stamp, '10 Okt 2026 · 14:20 WIB')
   assert.equal(d.time, '14:20 WIB')
   assert.equal(d.kind, 'pest')
