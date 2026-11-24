@@ -225,4 +225,114 @@ export const api = {
 
     return request(`/telemetry/history?${params.toString()}`)
   },
+
+  // ACTUATORS CONTROL
+  async controlActuator(actuatorId, payload) {
+    return request(`/actuators/${actuatorId}/control`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    })
+  },
+
+  async setDeviceMode(deviceId, mode) {
+    return request(`/devices/${deviceId}/mode`, {
+      method: 'PUT',
+      body: JSON.stringify({ mode }),
+    })
+  },
+
+  // CALIBRATIONS
+  async getCalibrations(deviceId, greenhouseId) {
+    const params = new URLSearchParams()
+    if (deviceId) params.set('device_id', deviceId)
+    if (greenhouseId) params.set('greenhouse_id', greenhouseId)
+    const query = params.toString()
+    return request(`/calibrations${query ? `?${query}` : ''}`)
+  },
+
+  // ALERTS & NOTIFICATIONS
+  async getAlertNotifications(options = {}) {
+    const params = new URLSearchParams()
+    for (const [k, v] of Object.entries(options)) {
+      if (v !== undefined && v !== null && v !== '') {
+        params.set(k, String(v))
+      }
+    }
+    const query = params.toString()
+    return request(`/alerts/notifications${query ? `?${query}` : ''}`)
+  },
+
+  async createAlertRule(ruleData) {
+    return request('/alerts/rules', {
+      method: 'POST',
+      body: JSON.stringify(ruleData),
+    })
+  },
+
+  // ACTIVITY LOGS
+  async getActivityLogs(options = {}) {
+    const params = new URLSearchParams()
+    for (const [k, v] of Object.entries(options)) {
+      if (v !== undefined && v !== null && v !== '') {
+        params.set(k, String(v))
+      }
+    }
+    const query = params.toString()
+    return request(`/activity-logs${query ? `?${query}` : ''}`)
+  },
+
+  async exportActivityLogs(options = {}) {
+    const params = new URLSearchParams()
+    for (const [k, v] of Object.entries(options)) {
+      if (v !== undefined && v !== null && v !== '') {
+        params.set(k, String(v))
+      }
+    }
+    const token = localStorage.getItem('tanova_token')
+    const query = params.toString()
+    const res = await fetch(`${API_BASE_URL}/activity-logs/export${query ? `?${query}` : ''}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    if (!res.ok) throw new Error('Gagal mengekspor log aktivitas.')
+    return res.blob()
+  },
+
+  // TELEMETRY EXPORT
+  async exportTelemetryCsv(deviceId, options = {}) {
+    const params = new URLSearchParams({ device_id: deviceId })
+    for (const [k, v] of Object.entries(options)) {
+      if (v !== undefined && v !== null && v !== '') {
+        params.set(k, String(v))
+      }
+    }
+    const token = localStorage.getItem('tanova_token')
+    const res = await fetch(`${API_BASE_URL}/telemetry/export?${params.toString()}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    if (!res.ok) throw new Error('Gagal mengekspor data telemetri.')
+    return res.blob()
+  },
+
+  // AI DIAGNOSES & RECOMMENDATIONS
+  async getAiDiagnoses(options = {}) {
+    const params = new URLSearchParams()
+    for (const [k, v] of Object.entries(options)) {
+      if (v !== undefined && v !== null && v !== '') {
+        params.set(k, String(v))
+      }
+    }
+    const query = params.toString()
+    return request(`/ai/diagnoses${query ? `?${query}` : ''}`)
+  },
+
+  async getAiRecommendations(options = {}) {
+    const params = new URLSearchParams()
+    for (const [k, v] of Object.entries(options)) {
+      if (v !== undefined && v !== null && v !== '') {
+        params.set(k, String(v))
+      }
+    }
+    const query = params.toString()
+    return request(`/ai/recommendations${query ? `?${query}` : ''}`)
+  },
 }

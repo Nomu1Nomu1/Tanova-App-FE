@@ -1,8 +1,10 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import Icon from '../components/Icon.vue'
 import AddAlertModal from '../components/AddAlertModal.vue'
 import tipBurnPhoto from '../assets/image/2a.jpg'
+import { api } from '../services/api'
+import { mapDiagnosis, toList, toText } from '../services/aiMappers'
 
 const props = defineProps({
   mode: { type: String, default: 'Otomatis' },
@@ -10,12 +12,55 @@ const props = defineProps({
 
 const isManual = computed(() => props.mode === 'Manual')
 
-// Pompa air bisa dinyalakan/dimatikan hanya di mode manual
-const pumpOn = ref(true)
+// ==============================
+// DATE & TIME HELPERS
+// ==============================
+const DAYS = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu']
+const MONTHS = [
+  'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+  'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember',
+]
+const SHORT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des']
 
-// Slider kontrol sensor (tampil di mode manual)
+function pad(n) {
+  return String(n).padStart(2, '0')
+}
+
+function formatDateIndo(dateInput) {
+  if (!dateInput) return '-'
+  const d = new Date(dateInput)
+  if (isNaN(d.getTime())) return String(dateInput)
+  return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`
+}
+
+function formatTimeWib(dateInput) {
+  const d = dateInput ? new Date(dateInput) : new Date()
+  return `${pad(d.getHours())}:${pad(d.getMinutes())} WIB`
+}
+
+const currentDate = new Date()
+const headerButtonDate = computed(() => {
+  return `${currentDate.getDate()} ${SHORT_MONTHS[currentDate.getMonth()]} ${currentDate.getFullYear()}`
+})
+
+// ==============================
+// STATE MANAGEMENT
+// ==============================
+const loading = ref(false)
+const errorMessage = ref('')
+const devicesList = ref([])
+const activeDevice = ref(null)
+const overviewData = ref(null)
+const lastUpdatedAt = ref(new Date())
+
+// Pompa air
+const pumpOn = ref(true)
+const pumpActuator = ref(null)
+const isTogglingPump = ref(false)
+
+// Sensor calibration & sliders (mode manual)
 const controls = ref([
-  { name: 'Sensor pH', value: 5, min: 0, max: 10, step: 1, decimals: 0, unit: 'pH' },
+  { name: 'Sensor pH', value: 5, min: 0, max: 10, step: 0.1, decimals: 1, unit: 'pH' },
   { name: 'Sensor EC/TDS', value: 1.42, min: 0, max: 2.84, step: 0.01, decimals: 2, unit: 'mS/cm' },
   { name: 'Sensor Suhu', value: 30, min: 0, max: 60, step: 1, decimals: 0, unit: '°C' },
 ])
@@ -24,26 +69,18 @@ function pct(c) {
   return `${((c.value - c.min) / (c.max - c.min)) * 100}%`
 }
 
-const metrics = [
-  { label: 'pH Larutan', value: '3.2', unit: 'pH', icon: 'drop', note: 'Target 5.8–6.2 · Stabil' },
-  { label: 'EC / TDS', value: '1.42', unit: 'mS/cm', icon: 'activity', note: 'Target 1.3–1.5 · Konsisten' },
-  { label: 'Suhu Air', value: '32', unit: '°C', icon: 'thermo', note: 'Target 20–24 °C · Stabil' },
-  { label: 'Level Tangki', value: '82', unit: '%', icon: 'tank', note: 'Target ≥ 75% · Aman' },
-]
+const sensors = ref([
+  { name: 'Sensor pH', date: 'Kalibrasi terakhir: 9 September 2026', status: 'OK' },
+  { name: 'Sensor EC/TDS', date: 'Kalibrasi terakhir: 1 September 2026', status: 'OK' },
+  { name: 'Sensor DHT22', date: 'Kalibrasi terakhir: 3 September 2026', status: 'OK' },
+])
 
-const sensors = [
-  { name: 'Sensor pH', date: 'Kalibrasi terakhir: 9 September 2026' },
-  { name: 'Sensor EC/TDS', date: 'Kalibrasi terakhir: 1 September 2026' },
-  { name: 'Sensor DHT22', date: 'Kalibrasi terakhir: 3 September 2026' },
-]
-
+// Alerts
 const alerts = ref([
   { text: 'Suhu air 32°C', badge: 'Warning', type: 'warning', icon: 'warn' },
   { text: 'pH terlalu rendah', badge: 'Alert', type: 'alert', icon: 'info' },
   { text: 'Level tangki sudah aman', badge: 'OK', type: 'ok', icon: 'bell' },
 ])
-
-// Modal Tambah Peringatan
 const showAlertModal = ref(false)
 const levelMap = {
   info: { type: 'ok', badge: 'Info', icon: 'info' },
@@ -51,24 +88,578 @@ const levelMap = {
   critical: { type: 'alert', badge: 'Alert', icon: 'info' },
 }
 
-function addAlert(data) {
-  const l = levelMap[data.level]
-  alerts.value.unshift({ text: data.name, badge: l.badge, type: l.type, icon: l.icon })
-  showAlertModal.value = false
-}
+// Activity logs
+const logs = ref([])
+const isExporting = ref(false)
 
-const logs = [
-  { text: 'AI Mendeteksi Gambar', date: '10 Oktober 2026' },
-  { text: 'AI Mendeteksi Gambar', date: '10 Oktober 2026' },
-  { text: 'AI Mendeteksi Gambar', date: '10 Oktober 2026' },
-  { text: 'AI Mendeteksi Gambar', date: '10 Oktober 2026' },
-]
-
-const recommendations = [
+// AI Diagnosis & Recommendations
+const latestDiagnosis = ref(null)
+const recommendations = ref([
   'Pastikan pH larutan stabil antara 5.8–6.2.',
   'Periksa debit pompa dan level tangki nutrisi.',
   'Pantau kesehatan akar dan kelembapan greenhouse.',
-]
+])
+
+// Realtime & Polling control
+let refreshTimer = null
+let streamController = null
+let overviewRequestId = 0
+
+function unwrapResponse(response) {
+  return response?.data ?? response
+}
+
+function getArrayResponse(response) {
+  const data = unwrapResponse(response)
+  if (Array.isArray(data)) return data
+  if (Array.isArray(data?.items)) return data.items
+  if (Array.isArray(data?.devices)) return data.devices
+  return []
+}
+
+// ==============================
+// METRICS EXTRACTION
+// ==============================
+function unwrapMetricValue(value) {
+  if (value === undefined || value === null || value === '') return null
+  if (typeof value === 'object') {
+    return value.value ?? value.val ?? value.reading ?? value.latest ?? null
+  }
+  return value
+}
+
+function findMetricValue(metrics, keys) {
+  if (!metrics || typeof metrics !== 'object') return null
+
+  for (const key of keys) {
+    const val = unwrapMetricValue(metrics[key])
+    if (val !== null) return val
+  }
+
+  const nested = [metrics.latest, metrics.values, metrics.data, metrics.telemetry]
+  for (const n of nested) {
+    if (!n || typeof n !== 'object') continue
+    for (const key of keys) {
+      const val = unwrapMetricValue(n[key])
+      if (val !== null) return val
+    }
+  }
+
+  return null
+}
+
+const currentMetrics = computed(() => {
+  return overviewData.value?.metrics || overviewData.value?.telemetry || {}
+})
+
+const metrics = computed(() => {
+  const m = currentMetrics.value
+
+  // 1. pH
+  const phRaw = findMetricValue(m, ['ph', 'pH', 'ph_value', 'sensor_ph'])
+  const phNum = phRaw !== null ? Number(phRaw) : null
+  const phVal = phNum !== null && !isNaN(phNum) ? phNum.toFixed(1) : '6.0'
+  let phNote = 'Target 5.8–6.2 · Stabil'
+  if (phNum !== null && !isNaN(phNum)) {
+    if (phNum < 5.8) phNote = 'Target 5.8–6.2 · Terlalu Rendah'
+    else if (phNum > 6.2) phNote = 'Target 5.8–6.2 · Terlalu Tinggi'
+  }
+
+  // 2. EC / TDS
+  const ecRaw = findMetricValue(m, ['ec', 'ec_value', 'tds', 'tds_value', 'sensor_ec'])
+  const ecNum = ecRaw !== null ? Number(ecRaw) : null
+  const ecVal = ecNum !== null && !isNaN(ecNum) ? ecNum.toFixed(2) : '1.42'
+  let ecNote = 'Target 1.3–1.5 · Konsisten'
+  if (ecNum !== null && !isNaN(ecNum)) {
+    if (ecNum < 1.3) ecNote = 'Target 1.3–1.5 · Nutrisi Rendah'
+    else if (ecNum > 1.5) ecNote = 'Target 1.3–1.5 · Nutrisi Tinggi'
+  }
+
+  // 3. Suhu Air
+  const tempRaw = findMetricValue(m, ['water_temp', 'temp_water', 'suhu_air', 'temp', 'temperature'])
+  const tempNum = tempRaw !== null ? Number(tempRaw) : null
+  const tempVal = tempNum !== null && !isNaN(tempNum) ? Math.round(tempNum).toString() : '24'
+  let tempNote = 'Target 20–24 °C · Stabil'
+  if (tempNum !== null && !isNaN(tempNum)) {
+    if (tempNum < 20) tempNote = 'Target 20–24 °C · Suhu Rendah'
+    else if (tempNum > 24) tempNote = 'Target 20–24 °C · Suhu Hangat'
+  }
+
+  // 4. Level Tangki
+  const tankRaw = findMetricValue(m, ['tank_level', 'level_tangki', 'water_level', 'tank'])
+  const tankNum = tankRaw !== null ? Number(tankRaw) : null
+  const tankVal = tankNum !== null && !isNaN(tankNum) ? Math.round(tankNum).toString() : '82'
+  let tankNote = 'Target ≥ 75% · Aman'
+  if (tankNum !== null && !isNaN(tankNum)) {
+    if (tankNum < 75) tankNote = 'Target ≥ 75% · Level Rendah'
+  }
+
+  return [
+    { label: 'pH Larutan', value: phVal, unit: 'pH', icon: 'drop', note: phNote },
+    { label: 'EC / TDS', value: ecVal, unit: 'mS/cm', icon: 'activity', note: ecNote },
+    { label: 'Suhu Air', value: tempVal, unit: '°C', icon: 'thermo', note: tempNote },
+    { label: 'Level Tangki', value: tankVal, unit: '%', icon: 'tank', note: tankNote },
+  ]
+})
+
+// Header subtitle
+const headerSubtitle = computed(() => {
+  const dayName = DAYS[currentDate.getDay()]
+  const dateStr = `${currentDate.getDate()} ${MONTHS[currentDate.getMonth()]} ${currentDate.getFullYear()}`
+  const timeStr = formatTimeWib(lastUpdatedAt.value)
+  const plant = plantName.value
+  return `${dayName}, ${dateStr} · Update terakhir: ${timeStr} · ${plant}`
+})
+
+const plantName = computed(() => {
+  return (
+    activeDevice.value?.plant_type ||
+    activeDevice.value?.crop_type ||
+    overviewData.value?.crop ||
+    'Selada Romaine'
+  )
+})
+
+const plantDays = computed(() => {
+  const days = activeDevice.value?.growth_day || overviewData.value?.growth_day || 45
+  return `${days} hari tanam`
+})
+
+// ==============================
+// ACTUATORS & PUMP
+// ==============================
+function syncActuators(data) {
+  const actuators = data?.actuators || activeDevice.value?.actuators || []
+  const pump = actuators.find(
+    (a) => a.type === 'pump' || a.name?.toLowerCase().includes('pompa'),
+  )
+
+  if (pump) {
+    pumpActuator.value = pump
+    const st = pump.state ?? pump.status
+    if (st === 'on' || pump.is_active === true) pumpOn.value = true
+    else if (st === 'off' || pump.is_active === false) pumpOn.value = false
+  } else {
+    const pVal = data?.pump ?? data?.water_pump
+    if (pVal !== undefined && pVal !== null) {
+      pumpOn.value = pVal === true || pVal === 'on'
+    }
+  }
+}
+
+async function togglePump() {
+  if (!isManual.value || isTogglingPump.value) return
+
+  const targetState = !pumpOn.value
+  isTogglingPump.value = true
+
+  try {
+    if (pumpActuator.value?.id) {
+      await api.controlActuator(pumpActuator.value.id, {
+        state: targetState ? 'on' : 'off',
+      })
+    }
+    pumpOn.value = targetState
+  } catch (error) {
+    console.error('Gagal mengubah status pompa:', error)
+    alert(error.message || 'Gagal mengubah status pompa air.')
+  } finally {
+    isTogglingPump.value = false
+  }
+}
+
+// ==============================
+// DATA FETCHING: OVERVIEW & REALTIME
+// ==============================
+async function fetchOverview(deviceId) {
+  if (!deviceId) return
+  const requestId = ++overviewRequestId
+
+  try {
+    const res = await api.getDashboardOverview(deviceId)
+    if (requestId !== overviewRequestId) return
+
+    const data = unwrapResponse(res) || {}
+    overviewData.value = data
+    lastUpdatedAt.value = new Date()
+    syncActuators(data)
+  } catch (error) {
+    if (requestId !== overviewRequestId) return
+    console.warn('Gagal memuat overview:', error)
+  }
+}
+
+function updateFromStream(payload) {
+  if (!payload || typeof payload !== 'object') return
+  const data = payload.data ?? payload
+  const incomingMetrics = data.metrics ?? data.telemetry ?? payload.metrics ?? null
+
+  if (incomingMetrics && typeof incomingMetrics === 'object') {
+    overviewData.value = {
+      ...overviewData.value,
+      ...data,
+      metrics: incomingMetrics,
+    }
+  } else {
+    overviewData.value = {
+      ...overviewData.value,
+      metrics: data,
+    }
+  }
+
+  syncActuators(overviewData.value)
+  lastUpdatedAt.value = new Date()
+}
+
+function processSseBlock(block) {
+  const lines = block.split(/\r?\n/)
+  const dataLines = []
+  let eventName = 'message'
+
+  for (const line of lines) {
+    if (line.startsWith(':')) continue
+    if (line.startsWith('event:')) eventName = line.slice(6).trim()
+    if (line.startsWith('data:')) dataLines.push(line.slice(5).trim())
+  }
+
+  if (dataLines.length === 0) return
+  const rawData = dataLines.join('\n')
+
+  try {
+    const payload = JSON.parse(rawData)
+    if (eventName === 'metrics' || eventName === 'message') {
+      updateFromStream(payload)
+    }
+  } catch (error) {
+    console.warn('Format event SSE bukan JSON valid:', rawData, error)
+  }
+}
+
+async function connectDashboardStream(deviceId) {
+  stopRealtime()
+  if (!deviceId) return
+
+  streamController = new AbortController()
+  const currentController = streamController
+
+  try {
+    const response = await api.getDashboardStream(deviceId, currentController.signal, 5)
+    if (!response.ok || !response.body) throw new Error('SSE stream tidak tersedia')
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done || currentController.signal.aborted) break
+      buffer += decoder.decode(value, { stream: true })
+      const blocks = buffer.split(/\r?\n\r?\n/)
+      buffer = blocks.pop() || ''
+      for (const block of blocks) {
+        processSseBlock(block)
+      }
+    }
+  } catch {
+    if (currentController.signal.aborted) return
+    startPolling(deviceId)
+  }
+}
+
+function startPolling(deviceId) {
+  stopPolling()
+  if (!deviceId) return
+
+  fetchOverview(deviceId)
+  refreshTimer = window.setInterval(() => {
+    fetchOverview(deviceId)
+  }, 5000)
+}
+
+function stopPolling() {
+  if (refreshTimer) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
+  }
+}
+
+function stopRealtime() {
+  stopPolling()
+  if (streamController) {
+    streamController.abort()
+    streamController = null
+  }
+}
+
+// ==============================
+// CALIBRATIONS, ALERTS & LOGS
+// ==============================
+async function loadCalibrations(deviceId) {
+  try {
+    const res = await api.getCalibrations(deviceId)
+    const list = unwrapResponse(res)
+    const items = Array.isArray(list) ? list : (list?.items || [])
+
+    if (items.length > 0) {
+      sensors.value = items.map((item) => {
+        const calDate =
+          item.last_calibrated_at || item.last_calibrated || item.calibrated_at || item.updated_at
+        return {
+          name: item.sensor_name || item.name || `Sensor ${item.sensor_type || item.type || ''}`,
+          date: calDate ? `Kalibrasi terakhir: ${formatDateIndo(calDate)}` : 'Kalibrasi dalam batas normal',
+          status: item.needs_calibration ? 'Perlu Kalibrasi' : 'OK',
+        }
+      })
+    } else if (activeDevice.value?.sensors?.length > 0) {
+      sensors.value = activeDevice.value.sensors.map((s) => ({
+        name: s.name || `Sensor ${s.type || ''}`,
+        date: s.last_calibrated
+          ? `Kalibrasi terakhir: ${formatDateIndo(s.last_calibrated)}`
+          : 'Kalibrasi dalam batas normal',
+        status: s.needs_calibration ? 'Perlu Kalibrasi' : 'OK',
+      }))
+    }
+  } catch (error) {
+    console.warn('Gagal memuat kalibrasi:', error)
+  }
+}
+
+async function loadAlerts() {
+  try {
+    const res = await api.getAlertNotifications({ limit: 5 })
+    const list = unwrapResponse(res)
+    const items = Array.isArray(list) ? list : (list?.items || list?.notifications || [])
+
+    if (items.length > 0) {
+      alerts.value = items.map((item) => {
+        const sev = (item.severity || item.level || 'warning').toLowerCase()
+        let type = 'warning'
+        let badge = 'Warning'
+        let icon = 'warn'
+
+        if (sev === 'critical' || sev === 'alert' || sev === 'danger') {
+          type = 'alert'
+          badge = 'Alert'
+          icon = 'info'
+        } else if (sev === 'info' || sev === 'ok' || sev === 'normal') {
+          type = 'ok'
+          badge = item.unread === false ? 'OK' : 'Info'
+          icon = 'bell'
+        }
+
+        return {
+          id: item.id,
+          text: item.message || item.text || item.title || item.name || 'Peringatan sensor',
+          badge: item.badge || badge,
+          type,
+          icon,
+        }
+      })
+    }
+  } catch (error) {
+    console.warn('Gagal memuat notifikasi alerts:', error)
+  }
+}
+
+async function handleAddAlert(data) {
+  try {
+    const metricMap = {
+      temp: 'water_temp',
+      ec: 'ec',
+      ph: 'ph',
+      level: 'tank_level',
+    }
+    const operatorMap = {
+      lt: '<',
+      gt: '>',
+      eq: '>=',
+    }
+
+    const payload = {
+      name: data.name,
+      metric: metricMap[data.parameter] || data.parameter,
+      operator: operatorMap[data.condition] || '<',
+      threshold: Number(data.threshold),
+      severity: data.level || 'warning',
+      is_active: true,
+    }
+
+    const devId = activeDevice.value?.id || activeDevice.value?._id
+    if (devId) payload.device_id = devId
+
+    await api.createAlertRule(payload)
+    await loadAlerts()
+  } catch (error) {
+    console.error('Gagal menambahkan aturan peringatan:', error)
+    // Optimistic fallback
+    const l = levelMap[data.level] || levelMap.warning
+    alerts.value.unshift({ text: data.name, badge: l.badge, type: l.type, icon: l.icon })
+  } finally {
+    showAlertModal.value = false
+  }
+}
+
+async function loadActivityLogs() {
+  try {
+    const res = await api.getActivityLogs({ limit: 5 })
+    const list = unwrapResponse(res)
+    const items = Array.isArray(list) ? list : (list?.items || list?.logs || [])
+
+    if (items.length > 0) {
+      logs.value = items.map((item) => ({
+        text: item.description || item.action || item.message || 'Aktivitas sistem',
+        date: item.created_at ? formatDateIndo(item.created_at) : 'Baru saja',
+      }))
+    } else {
+      logs.value = [
+        { text: 'Sistem monitoring aktif', date: formatDateIndo(new Date()) },
+      ]
+    }
+  } catch (error) {
+    console.warn('Gagal memuat log aktivitas:', error)
+  }
+}
+
+async function handleExportCsv() {
+  if (isExporting.value) return
+  isExporting.value = true
+
+  try {
+    const devId = activeDevice.value?.id || activeDevice.value?._id
+    let blob
+    if (devId) {
+      blob = await api.exportTelemetryCsv(devId)
+    } else {
+      blob = await api.exportActivityLogs()
+    }
+
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `tanova-telemetry-${new Date().toISOString().slice(0, 10)}.csv`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    window.URL.revokeObjectURL(url)
+  } catch (error) {
+    console.error('Gagal mengekspor CSV:', error)
+    alert(error.message || 'Gagal mengekspor CSV telemetri.')
+  } finally {
+    isExporting.value = false
+  }
+}
+
+// ==============================
+// AI DIAGNOSES & RECOMMENDATIONS
+// ==============================
+async function loadAiData() {
+  try {
+    const devId = activeDevice.value?.id || activeDevice.value?._id
+    const [diagRes, recoRes] = await Promise.allSettled([
+      api.getAiDiagnoses({ limit: 1, ...(devId ? { device_id: devId } : {}) }),
+      api.getAiRecommendations({ limit: 3, ...(devId ? { device_id: devId } : {}) }),
+    ])
+
+    if (diagRes.status === 'fulfilled') {
+      const data = unwrapResponse(diagRes.value)
+      const list = toList(data)
+      if (list.length > 0) {
+        latestDiagnosis.value = mapDiagnosis(list[0])
+      }
+    }
+
+    if (recoRes.status === 'fulfilled') {
+      const data = unwrapResponse(recoRes.value)
+      const items = toList(data)
+      if (items.length > 0) {
+        const mapped = items.map((i) => toText(i)).filter(Boolean)
+        if (mapped.length > 0) recommendations.value = mapped
+      }
+    }
+  } catch (error) {
+    console.warn('Gagal memuat data AI:', error)
+  }
+}
+
+const diagnosisTitle = computed(() => latestDiagnosis.value?.name || 'Tip Burn (Defisiensi Kalsium)')
+const diagnosisConfidence = computed(() => latestDiagnosis.value?.conf ?? 87.3)
+const diagnosisSeverity = computed(() => {
+  if (latestDiagnosis.value?.ok) return 'Sehat'
+  return 'Sedang'
+})
+const diagnosisBadgeClass = computed(() => {
+  if (latestDiagnosis.value?.ok) return 'pill--on'
+  return 'pill--orange'
+})
+const diagnosisPhoto = computed(() => latestDiagnosis.value?.photo || tipBurnPhoto)
+const diagnosisSubtitle = computed(() => {
+  const plant = plantName.value
+  const zone = latestDiagnosis.value?.zone || 'Zona 1'
+  const time = latestDiagnosis.value?.time || '08:35 WIB'
+  return `Tanaman: ${plant} · ${zone} · ${time}`
+})
+
+// ==============================
+// INITIALIZATION
+// ==============================
+async function initDashboard() {
+  loading.value = true
+  errorMessage.value = ''
+
+  try {
+    const devRes = await api.getDevices()
+    devicesList.value = getArrayResponse(devRes)
+
+    if (devicesList.value.length > 0) {
+      activeDevice.value = devicesList.value[0]
+      const devId = activeDevice.value.id || activeDevice.value._id
+
+      await Promise.allSettled([
+        fetchOverview(devId),
+        loadCalibrations(devId),
+        loadAlerts(),
+        loadActivityLogs(),
+        loadAiData(),
+      ])
+
+      connectDashboardStream(devId)
+    } else {
+      // Tidak ada device, tetap muat notifikasi & logs umum
+      await Promise.allSettled([
+        loadAlerts(),
+        loadActivityLogs(),
+        loadAiData(),
+      ])
+    }
+  } catch (error) {
+    console.error('Gagal inisialisasi dashboard:', error)
+    errorMessage.value = error.message || 'Gagal memuat data dashboard.'
+  } finally {
+    loading.value = false
+  }
+}
+
+watch(
+  () => props.mode,
+  async (newMode) => {
+    const devId = activeDevice.value?.id || activeDevice.value?._id
+    if (devId) {
+      try {
+        await api.setDeviceMode(devId, newMode === 'Manual' ? 'manual' : 'auto')
+      } catch (err) {
+        console.warn('Gagal menyinkronkan mode perangkat:', err)
+      }
+    }
+  },
+)
+
+onMounted(() => {
+  initDashboard()
+})
+
+onBeforeUnmount(() => {
+  stopRealtime()
+})
 </script>
 
 <template>
@@ -76,12 +667,12 @@ const recommendations = [
     <section class="head">
       <div>
         <h1>Dashboard Device</h1>
-        <p>Senin, 10 September 2026 · Update terakhir: 08:42 WIB · Selada</p>
+        <p>{{ headerSubtitle }}</p>
       </div>
       <div class="head__actions">
         <button type="button" class="btn btn--ghost">
           <Icon name="calendar" />
-          10 Sep 2026
+          {{ headerButtonDate }}
         </button>
         <button type="button" class="btn btn--solid" @click="showAlertModal = true">
           <Icon name="bell" />
@@ -112,7 +703,7 @@ const recommendations = [
             <h3>Kontrol Aktuator</h3>
             <p>{{ isManual ? 'Mode manual' : 'Mode otomatis aktif' }}</p>
           </div>
-          <span class="pill pill--soft">1 Aktif</span>
+          <span class="pill pill--soft">{{ pumpOn ? '1 Aktif' : '0 Aktif' }}</span>
         </div>
 
         <div class="item item--lg">
@@ -126,11 +717,14 @@ const recommendations = [
             class="pill pill-btn"
             :class="pumpOn ? 'pill--on' : 'pill--off'"
             :aria-pressed="pumpOn"
-            @click="pumpOn = !pumpOn"
+            :disabled="isTogglingPump"
+            @click="togglePump"
           >
-            {{ pumpOn ? 'ON' : 'OFF' }}
+            {{ isTogglingPump ? '...' : (pumpOn ? 'ON' : 'OFF') }}
           </button>
-          <span v-else class="pill pill--on">ON</span>
+          <span v-else class="pill" :class="pumpOn ? 'pill--on' : 'pill--off'">
+            {{ pumpOn ? 'ON' : 'OFF' }}
+          </span>
         </div>
 
         <h4>Kalibrasi Sensor</h4>
@@ -163,7 +757,7 @@ const recommendations = [
                 <small>{{ s.date }}</small>
               </span>
             </span>
-            <b class="ok">OK</b>
+            <b class="ok">{{ s.status || 'OK' }}</b>
           </div>
         </template>
       </article>
@@ -172,12 +766,12 @@ const recommendations = [
         <div class="panel__head">
           <div>
             <h3>Peringatan &amp; Notifikasi</h3>
-            <p>1 warning · 1 critical</p>
+            <p>{{ alerts.length }} peringatan terdaftar</p>
           </div>
-          <span class="pill pill--soft">1 Notifikasi</span>
+          <span class="pill pill--soft">{{ alerts.length }} Notifikasi</span>
         </div>
 
-        <div v-for="a in alerts" :key="a.text" class="alert" :class="`alert--${a.type}`">
+        <div v-for="(a, idx) in alerts" :key="a.id || idx" class="alert" :class="`alert--${a.type}`">
           <span class="item__left">
             <Icon :name="a.icon" />
             <b>{{ a.text }}</b>
@@ -188,8 +782,8 @@ const recommendations = [
         <h4>Tanaman di Hidroponik</h4>
         <div class="plant">
           <Icon name="leaf" />
-          <b>Selada Romaine</b>
-          <small>45 hari tanam</small>
+          <b>{{ plantName }}</b>
+          <small>{{ plantDays }}</small>
         </div>
       </article>
     </section>
@@ -200,14 +794,25 @@ const recommendations = [
         <div class="panel__head">
           <div>
             <h3>Log Aktivitas &amp; Telemetri</h3>
-            <p>0 entri terbaru</p>
+            <p>{{ logs.length }} entri terbaru</p>
           </div>
-          <button type="button" class="btn btn--tiny">
+          <button
+            type="button"
+            class="btn btn--tiny"
+            :disabled="isExporting"
+            @click="handleExportCsv"
+          >
             <Icon name="download" />
-            Ekspor CSV
+            {{ isExporting ? 'Mengunduh...' : 'Ekspor CSV' }}
           </button>
         </div>
 
+        <div v-if="logs.length === 0" class="item item--log">
+          <span class="item__left">
+            <Icon name="bell" />
+            <b>Belum ada log aktivitas terbaru</b>
+          </span>
+        </div>
         <div v-for="(l, i) in logs" :key="i" class="item item--log">
           <span class="item__left">
             <Icon name="bell" />
@@ -223,7 +828,7 @@ const recommendations = [
             <h3>Diagnosis AI Tanaman</h3>
             <p>Deteksi otomatis dari kamera node</p>
           </div>
-          <button type="button" class="btn btn--tiny">
+          <button type="button" class="btn btn--tiny" @click="loadAiData">
             <Icon name="history" />
             Riwayat
           </button>
@@ -231,30 +836,35 @@ const recommendations = [
 
         <div class="diag">
           <div class="diag__img">
-            <img v-if="tipBurnPhoto" :src="tipBurnPhoto" alt="Foto daun selada dengan gejala tip burn" />
+            <img v-if="diagnosisPhoto" :src="diagnosisPhoto" alt="Foto daun selada" />
             <Icon v-else name="leaf" />
           </div>
           <div class="diag__info">
             <div class="diag__title">
-              <b>Tip Burn (Defisiensi Kalsium)</b>
-              <span class="pill pill--orange">Sedang</span>
+              <b>{{ diagnosisTitle }}</b>
+              <span class="pill" :class="diagnosisBadgeClass">{{ diagnosisSeverity }}</span>
             </div>
             <div class="diag__conf">
-              <span>Confidence</span><b>87.3%</b>
+              <span>Confidence</span><b>{{ diagnosisConfidence }}%</b>
             </div>
-            <div class="bar"><i style="width: 87.3%"></i></div>
-            <small>Tanaman: Selada Romaine · Zona 1 · 08:35 WIB</small>
+            <div class="bar"><i :style="{ width: `${diagnosisConfidence}%` }"></i></div>
+            <small>{{ diagnosisSubtitle }}</small>
           </div>
         </div>
 
         <h4>Rekomendasi AI</h4>
         <ul class="reco">
-          <li v-for="r in recommendations" :key="r">{{ r }}</li>
+          <li v-for="(r, i) in recommendations" :key="i">{{ r }}</li>
         </ul>
       </article>
     </section>
 
-    <AddAlertModal v-if="showAlertModal" @close="showAlertModal = false" @save="addAlert" />
+    <AddAlertModal
+      v-if="showAlertModal"
+      :device-name="activeDevice?.name || 'Tanova Grove – 1'"
+      @close="showAlertModal = false"
+      @save="handleAddAlert"
+    />
   </div>
 </template>
 
@@ -452,8 +1062,6 @@ const recommendations = [
   color: #fff;
   background: linear-gradient(135deg, #4d7c0f, #84a83a);
   border-radius: 8px;
-}
-.diag__img {
   overflow: hidden;
 }
 .diag__img img {

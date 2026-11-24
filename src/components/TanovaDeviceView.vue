@@ -111,14 +111,14 @@ function updateFromStream(payload) {
 
   if (incomingMetrics && typeof incomingMetrics === 'object') {
     overviewData.value = {
-      ...(overviewData.value || {}),
+      ...overviewData.value,
       ...data,
       metrics: incomingMetrics,
     }
   } else {
     // Beberapa implementasi stream mengirim object metrik secara langsung.
     overviewData.value = {
-      ...(overviewData.value || {}),
+      ...overviewData.value,
       metrics: data,
     }
   }
