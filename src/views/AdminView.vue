@@ -36,6 +36,24 @@ async function loadAdminData() {
   }
 }
 
+// Status koneksi perangkat dibaca dari data server (device.connection.online)
+function deviceStatusLabel(dev) {
+  const online = dev.connection?.online ?? dev.online
+
+  if (online === true) return 'Terhubung'
+  if (online === false) return 'Terputus'
+
+  return 'Tidak diketahui'
+}
+
+// Nama greenhouse dicari dari greenhouse_id milik perangkat
+function greenhouseNameOf(dev) {
+  const id = dev.greenhouse_id || dev.greenhouse?.id
+  const gh = greenhousesList.value.find((g) => (g.id || g._id) === id)
+
+  return gh?.name || dev.greenhouse?.name || dev.greenhouse_name || 'Belum diatur'
+}
+
 onMounted(() => {
   loadAdminData()
 })
@@ -62,7 +80,7 @@ const newUser = ref({
   email: '',
   password: '',
   phone: '',
-  role: 'User',
+  role: 'operator',
   selectedGreenhouses: [],
 })
 
@@ -168,7 +186,7 @@ async function handleSaveUser() {
       email: '',
       password: '',
       phone: '',
-      role: 'User',
+      role: 'operator',
       selectedGreenhouses: [],
     }
     loadAdminData()
@@ -214,17 +232,23 @@ function handleCloseEditDeviceModal() {
 async function handleUpdateDevice() {
   if (!editingDeviceId.value) return
   try {
-    // Panggil API PATCH untuk update informasi device
-    await api.patchDevice(editingDeviceId.value, {
+    const body = {
       name: editDeviceForm.value.name,
       zone: editDeviceForm.value.zone,
       type: editDeviceForm.value.type,
       tb_device_id: editDeviceForm.value.tb_device_id,
       tb_url: editDeviceForm.value.tb_url,
       tb_username: editDeviceForm.value.tb_username,
-      tb_password: editDeviceForm.value.tb_password,
       notes: editDeviceForm.value.notes,
-    })
+    }
+
+    // Password hanya dikirim kalau diisi (kosong = tidak diubah)
+    if (editDeviceForm.value.tb_password) {
+      body.tb_password = editDeviceForm.value.tb_password
+    }
+
+    // Panggil API PATCH untuk update informasi device
+    await api.patchDevice(editingDeviceId.value, body)
 
     alert('Perangkat berhasil diperbarui!')
     showEditDeviceModal.value = false
@@ -502,14 +526,12 @@ async function handleDeleteUser(usr) {
                 <code>{{ dev.tb_device_id || dev.thingsboardId || dev.tbId || '-' }}</code>
               </td>
               <td>
-                {{
-                  dev.greenhouse?.name || dev.greenhouse_name || dev.greenhouse || 'Belum diatur'
-                }}
+                {{ greenhouseNameOf(dev) }}
               </td>
               <td>
                 <span class="pill-connected">
                   <i class="fa-solid fa-circle status-dot"></i>
-                  {{ dev.status || 'Terhubung' }}
+                  {{ deviceStatusLabel(dev) }}
                 </span>
               </td>
               <td class="text-right action-buttons-cell">

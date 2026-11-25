@@ -1,4 +1,3 @@
-
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
 
 async function request(endpoint, options = {}) {
@@ -60,6 +59,21 @@ export const api = {
   // USERS
   async getMe() {
     return request('/users/me')
+  },
+
+  // Ubah profil akun sendiri: name, username, email, phone, current_password
+  async patchMe(data) {
+    return request('/users/me', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    })
+  },
+  // Ubah profil akun sendiri: name, username, email, phone, current_password
+  async patchMe(data) {
+    return request('/users/me', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    })
   },
 
   async getUsers() {

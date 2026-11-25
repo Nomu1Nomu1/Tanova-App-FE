@@ -115,7 +115,7 @@ export function mapDiagnosis(item, assetBase = '') {
   if (typeof photo !== 'string') photo = null
   else if (photo.startsWith('/')) photo = assetBase + photo
 
-  const ts = parseTime(pick(item, ['created_at', 'captured_at', 'taken_at', 'timestamp', 'date']))
+  const ts = parseTime(pick(item, ['captured_at', 'created_at', 'taken_at', 'timestamp', 'date']))
 
   return {
     id: pick(item, ['id', 'diagnosis_id', '_id'], null),

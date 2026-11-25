@@ -33,10 +33,7 @@ function getArrayResponse(response) {
   return []
 }
 
-// ==============================
-// LOAD DEVICES
-// ==============================
-
+//LOAD DEVICES
 async function loadDevices() {
   loading.value = true
 
@@ -66,10 +63,7 @@ async function loadDevices() {
   }
 }
 
-// ==============================
-// OVERVIEW
-// ==============================
-
+//OVERVIEW
 async function fetchOverview(deviceId) {
   if (!deviceId || isRefreshingOverview.value) return
 
@@ -98,10 +92,7 @@ async function fetchOverview(deviceId) {
   }
 }
 
-// ==============================
-// SSE PAYLOAD HANDLER
-// ==============================
-
+//SSE PAYLOAD HANDLER
 function updateFromStream(payload) {
   if (!payload || typeof payload !== 'object') return
 
@@ -139,10 +130,7 @@ function updateFromStream(payload) {
   overviewError.value = ''
 }
 
-// ==============================
-// SSE PARSER
-// ==============================
-
+//SSE PARSER
 function processSseBlock(block) {
   const lines = block.split(/\r?\n/)
   const dataLines = []
@@ -176,10 +164,7 @@ function processSseBlock(block) {
   }
 }
 
-// ==============================
-// SSE CONNECTION
-// ==============================
-
+//SSE CONNECTION
 async function connectDashboardStream(deviceId) {
   stopRealtime()
 
@@ -238,10 +223,7 @@ async function connectDashboardStream(deviceId) {
   }
 }
 
-// ==============================
-// POLLING FALLBACK
-// ==============================
-
+//POLLING FALLBACK
 function startPolling(deviceId) {
   stopPolling()
 
@@ -274,10 +256,7 @@ function stopRealtime() {
   realtimeStatus.value = 'Terputus'
 }
 
-// ==============================
-// DEVICE SELECTION
-// ==============================
-
+//DEVICE SELECTION
 async function selectDevice(device) {
   const deviceId = device.id || device._id
 
@@ -302,10 +281,7 @@ async function selectDevice(device) {
   connectDashboardStream(deviceId)
 }
 
-// ==============================
-// SENSOR MAPPING
-// ==============================
-
+//SENSOR MAPPING
 const metricAliases = {
   ph: ['ph', 'pH', 'ph_value'],
   ec: ['ec', 'ec_value'],
@@ -359,11 +335,19 @@ function getMetricValue(metrics, sensor) {
   return null
 }
 
+function formatCalDate(iso) {
+  if (!iso) return null
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return null
+  return d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
 const sensors = computed(() => {
   if (!selectedDevice.value) return []
 
   const deviceSensors = selectedDevice.value.sensors || []
   const metrics = overviewData.value?.metrics || {}
+  const calibItems = overviewData.value?.calibration?.items || []
 
   return deviceSensors.map((sensor) => {
     let rawValue = getMetricValue(metrics, sensor)
@@ -373,25 +357,28 @@ const sensors = computed(() => {
       rawValue = Number(rawValue).toFixed(1)
     }
 
+    // Data kalibrasi ada di overview.calibration.items (dicocokkan lewat id, lalu tipe sensor)
+    const sensorId = sensor.id || sensor._id
+    const cal =
+      calibItems.find((c) => c.sensor_id && c.sensor_id === sensorId) ||
+      calibItems.find((c) => c.sensor_type && c.sensor_type === sensor.type)
+
     return {
-      id: sensor.id || sensor._id || sensor.tb_key || sensor.type,
+      id: sensorId || sensor.tb_key || sensor.type,
       name: sensor.name || sensor.type?.toUpperCase() || 'Sensor',
       desc: `Tipe: ${sensor.type || '-'} · Key: ${sensor.tb_key || '-'}`,
       unit: sensor.unit || '',
       value: hasValue ? `${rawValue} ${sensor.unit || ''}`.trim() : '-',
       status: hasValue ? 'Data diterima' : 'Menunggu data',
-      calibration: sensor.last_calibrated || '-',
-      nextCal: sensor.next_due_at || '-',
+      calibration: formatCalDate(cal?.last_calibrated_at) || sensor.last_calibrated || '-',
+      nextCal: formatCalDate(cal?.due_at) || sensor.next_due_at || '-',
       urgent: Boolean(sensor.needs_calibration),
       hasValue,
     }
   })
 })
 
-// ==============================
-// CONNECTION STATUS
-// ==============================
-
+//CONNECTION STATUS
 const connectionStatus = computed(() => {
   const online = overviewData.value?.connection?.online ?? overviewData.value?.online
 
@@ -401,10 +388,25 @@ const connectionStatus = computed(() => {
   return 'Tidak diketahui'
 })
 
-// ==============================
-// ACTUATOR
-// ==============================
+// Status koneksi satu perangkat dari daftar /devices (ada di device.connection.online)
+function deviceConnectionLabel(device) {
+  const online = device.connection?.online ?? device.online
 
+  if (online === true) return 'Terhubung'
+  if (online === false) return 'Terputus'
+
+  return 'Tidak diketahui'
+}
+
+// Perangkat yang sedang dipilih memakai status dari overview (lebih baru)
+function rowStatus(device) {
+  const isSelected =
+    (device.id || device._id) === (selectedDevice.value?.id || selectedDevice.value?._id)
+
+  return isSelected ? connectionStatus.value : deviceConnectionLabel(device)
+}
+
+//ACTUATOR
 const pumpStatus = computed(() => {
   const actuators = overviewData.value?.actuators || selectedDevice.value?.actuators || []
 
@@ -415,8 +417,8 @@ const pumpStatus = computed(() => {
   if (pump) {
     const state = pump.state ?? pump.status
 
-    if (state === 'on' || pump.is_active === true) return 'Menyala'
-    if (state === 'off' || pump.is_active === false) return 'Mati'
+    if (state === 'on') return 'Menyala'
+    if (state === 'off') return 'Mati'
   }
 
   const value = overviewData.value?.pump ?? overviewData.value?.water_pump
@@ -427,26 +429,14 @@ const pumpStatus = computed(() => {
   return 'Tidak diketahui'
 })
 
-// ==============================
-// FILTER & SUMMARY
-// ==============================
-
+//FILTER & SUMMARY
 const filteredDevices = computed(() => {
   return devicesList.value.filter((device) => {
     const nameMatch =
       device.name?.toLowerCase().includes(searchQuery.value.toLowerCase()) ||
       (device.tb_device_id || '').toLowerCase().includes(searchQuery.value.toLowerCase())
 
-    const isSelected =
-      (device.id || device._id) === (selectedDevice.value?.id || selectedDevice.value?._id)
-
-    const status = isSelected
-      ? connectionStatus.value
-      : device.online === true
-        ? 'Terhubung'
-        : device.online === false
-          ? 'Terputus'
-          : 'Tidak diketahui'
+    const status = rowStatus(device)
 
     const statusMatch = selectedStatus.value === 'Semua Status' || status === selectedStatus.value
 
@@ -457,17 +447,14 @@ const filteredDevices = computed(() => {
 const totalDevicesCount = computed(() => devicesList.value.length)
 
 const connectedDevicesCount = computed(
-  () => devicesList.value.filter((device) => device.online === true).length,
+  () => devicesList.value.filter((device) => rowStatus(device) === 'Terhubung').length,
 )
 
 const disconnectedDevicesCount = computed(
-  () => devicesList.value.filter((device) => device.online === false).length,
+  () => devicesList.value.filter((device) => rowStatus(device) === 'Terputus').length,
 )
 
-// ==============================
-// ACTIONS
-// ==============================
-
+//ACTIONS
 async function handleRefresh() {
   if (!selectedDevice.value) {
     await loadDevices()
@@ -490,10 +477,7 @@ async function handleCalibrate() {
   alert(`Memulai proses kalibrasi untuk perangkat: ${selectedDevice.value.name}`)
 }
 
-// ==============================
-// LIFECYCLE
-// ==============================
-
+//LIFECYCLE
 onMounted(() => {
   loadDevices()
 })
@@ -657,19 +641,10 @@ onBeforeUnmount(() => {
                 <span
                   :class="[
                     'status-pill',
-                    ((dev.id || dev._id) === (selectedDevice?.id || selectedDevice?._id)
-                      ? connectionStatus
-                      : dev.status || 'Tidak diketahui') === 'Terhubung'
-                      ? 'status-connected'
-                      : 'status-disconnected',
+                    rowStatus(dev) === 'Terhubung' ? 'status-connected' : 'status-disconnected',
                   ]"
                 >
-                  ●
-                  {{
-                    (dev.id || dev._id) === (selectedDevice?.id || selectedDevice?._id)
-                      ? connectionStatus
-                      : dev.status || 'Tidak diketahui'
-                  }}
+                  ● {{ rowStatus(dev) }}
                 </span>
               </td>
               <td>{{ dev.sensors?.length || 0 }} aktif</td>
