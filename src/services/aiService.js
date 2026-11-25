@@ -46,7 +46,11 @@ async function request(path, { method = 'GET', query, body, timeout = 60000 } = 
   const timer = setTimeout(() => ctrl.abort(), timeout)
 
   try {
-    const res = await fetch(url, { method, headers, body: payload, signal: ctrl.signal })
+    const fetchOptions = { method, headers, signal: ctrl.signal }
+    if (payload && method !== 'GET') {
+      fetchOptions.body = payload
+    }
+    const res = await fetch(url, fetchOptions)
     const isJson = res.headers.get('content-type')?.includes('application/json')
     const data = isJson ? await res.json() : null
     if (!res.ok) throw new ApiError(data?.message ?? data?.detail ?? res.statusText, res.status, data)

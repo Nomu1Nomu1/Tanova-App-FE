@@ -24,7 +24,11 @@ function close() {
   open.value = false
 }
 function toggle() {
-  open.value ? close() : openList()
+  if (open.value) {
+    close()
+  } else {
+    openList()
+  }
 }
 function pick(o) {
   emit('update:modelValue', o.value)
@@ -42,7 +46,11 @@ function onKey(e) {
     active.value = (active.value + (e.key === 'ArrowDown' ? 1 : -1) + n) % n
   } else if (e.key === 'Enter' || e.key === ' ') {
     e.preventDefault()
-    open.value ? pick(props.options[active.value]) : openList()
+    if (open.value) {
+      pick(props.options[active.value])
+    } else {
+      openList()
+    }
   } else if (e.key === 'Tab') {
     close()
   }
