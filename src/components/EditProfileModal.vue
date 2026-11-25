@@ -33,12 +33,18 @@ async function onSave() {
     const value = form[key].trim()
     if (value !== (props.user?.[key] || '')) body[key] = value
   }
-  if (form.current_password) body.current_password = form.current_password
 
   if (Object.keys(body).length === 0) {
     emit('close')
     return
   }
+
+  // Backend mewajibkan password saat ini untuk setiap perubahan profil
+  if (!form.current_password) {
+    errorMsg.value = 'Password saat ini wajib diisi untuk menyimpan perubahan.'
+    return
+  }
+  body.current_password = form.current_password
 
   try {
     isSaving.value = true
@@ -100,8 +106,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           </div>
 
           <div class="field">
-            <label for="ep-pass">Password saat ini <span class="opt">(isi jika diminta)</span></label>
-            <input id="ep-pass" v-model="form.current_password" type="password" autocomplete="current-password" />
+            <label for="ep-pass">Password saat ini</label>
+            <input id="ep-pass" v-model="form.current_password" type="password" autocomplete="current-password" placeholder="Masukkan password akun Anda" required />
           </div>
 
           <p v-if="errorMsg" class="error" role="alert">{{ errorMsg }}</p>
