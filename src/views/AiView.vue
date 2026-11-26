@@ -1,7 +1,8 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import Icon from '../components/Icon.vue'
-import { loadAiOverview } from '../services/aiService.js'
+import { aiService, API_ORIGIN, loadAiOverview } from '../services/aiService.js'
+import { formatStamp, mapDiagnosis, mapRisks } from '../services/aiMappers.js'
 import foto1 from '../assets/image/1.jpg'
 import foto1a from '../assets/image/1a.jpg'
 import foto1b from '../assets/image/1b.jpg'
@@ -120,19 +121,33 @@ const results = [
 // Foto contoh dari file lokal. Data dari server memakai foto dari server.
 const galleryPhotos = [foto1, foto1a, foto1b]
 
-// 24 gambar contoh, 8 per hari (10, 9, 8 Okt), urutan terbaru dulu
+// 24 gambar contoh relatif terhadap hari ini (8 per hari, urutan terbaru dulu)
+const nowMs = Date.now()
 const sampleShots = Array.from({ length: 24 }, (_, i) => {
   const r = results[(i * 5 + 1) % results.length]
+  const dayOffset = Math.floor(i / 8)
+  const d = new Date(nowMs - dayOffset * 86_400_000)
+  d.setHours(15 - (i % 8), 20, 0, 0)
+  const ts = d.getTime()
   return {
     id: i,
     zone: zones[i % zones.length],
     ...r,
-    stamp: `${10 - Math.floor(i / 8)} Okt 2026 · ${String(15 - (i % 8)).padStart(2, '0')}:20 WIB`,
+    ts,
+    stamp: formatStamp(ts),
     hue: 92 + ((i * 7) % 24),
     photo: galleryPhotos[i % galleryPhotos.length],
   }
 })
 const shotsData = ref(sampleShots)
+
+const SHORT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des']
+function formatShortDate(ms) {
+  const d = new Date(ms)
+  return `${d.getDate()} ${SHORT_MONTHS[d.getMonth()]} ${d.getFullYear()}`
+}
+const todayLabel = formatShortDate(nowMs)
+const chartSubtitle = `Selada Romaine · ${formatShortDate(nowMs - 6 * 86_400_000)} – ${todayLabel}`
 
 /* ---------- Memuat data dari server ---------- */
 const loading = ref(true)
@@ -159,20 +174,127 @@ onMounted(async () => {
 
 const query = ref('')
 const resultFilter = ref('all')
+const dateFilter = ref('all')
 const newestFirst = ref(true)
 const visible = ref(6)
 
 const filtered = computed(() => {
   const q = query.value.trim().toLowerCase()
+  const now = Date.now()
+  const startOfToday = new Date().setHours(0, 0, 0, 0)
   const list = shotsData.value.filter((s) => {
     const matchText = !q || s.zone.toLowerCase().includes(q) || s.name.toLowerCase().includes(q)
     const matchResult =
       resultFilter.value === 'all' || (resultFilter.value === 'ok' ? s.ok : !s.ok)
-    return matchText && matchResult
+    let matchDate = true
+    if (dateFilter.value !== 'all' && Number.isFinite(s.ts)) {
+      if (dateFilter.value === 'today') matchDate = s.ts >= startOfToday
+      else if (dateFilter.value === '7d') matchDate = s.ts >= now - 7 * 86_400_000
+      else if (dateFilter.value === '30d') matchDate = s.ts >= now - 30 * 86_400_000
+    }
+    return matchText && matchResult && matchDate
   })
   return newestFirst.value ? list : [...list].reverse()
 })
 const shown = computed(() => filtered.value.slice(0, visible.value))
+
+/* ---------- Upload foto tanaman & diagnosis ---------- */
+const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp']
+const MAX_BYTES = 5 * 1024 * 1024 // sesuai MAX_UPLOAD_MB backend (5 MB)
+
+const fileInput = ref(null)
+const uploading = ref(false)
+const uploadError = ref('')
+const uploadResult = ref(null)
+let previewObjectUrl = null
+
+const canUpload = computed(() => {
+  try {
+    const role = JSON.parse(localStorage.getItem('tanova_user') || '{}')?.role
+    return role !== 'viewer'
+  } catch {
+    return true
+  }
+})
+
+function revokePreview() {
+  if (previewObjectUrl) {
+    URL.revokeObjectURL(previewObjectUrl)
+    previewObjectUrl = null
+  }
+}
+
+function clearUpload() {
+  revokePreview()
+  uploadResult.value = null
+  uploadError.value = ''
+}
+
+onBeforeUnmount(revokePreview)
+
+function resolvePhotoUrl(url, fallback) {
+  if (!url) return fallback
+  return /^https?:/.test(url) ? url : `${API_ORIGIN}${url.startsWith('/') ? url : `/${url}`}`
+}
+
+async function onFileSelected(event) {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (!file || uploading.value) return
+
+  uploadError.value = ''
+  if (!canUpload.value) {
+    uploadError.value = 'Akun viewer tidak memiliki izin untuk mengunggah foto.'
+    return
+  }
+  if (!ALLOWED_TYPES.includes(file.type)) {
+    uploadError.value = 'Format foto harus JPG, PNG, atau WebP.'
+    return
+  }
+  if (file.size === 0 || file.size > MAX_BYTES) {
+    uploadError.value = 'Ukuran foto maksimal 5 MB dan tidak boleh kosong.'
+    return
+  }
+
+  revokePreview()
+  previewObjectUrl = URL.createObjectURL(file)
+  uploading.value = true
+
+  try {
+    const res = await aiService.analyze(file)
+    const photo = resolvePhotoUrl(res.image_url, previewObjectUrl)
+
+    if (res.saved === false || res.is_plant === false) {
+      uploadResult.value = {
+        saved: false,
+        photo,
+        title: 'Bukan Tanaman',
+        ok: false,
+        conf: null,
+        plant: '-',
+        advice: res.message || 'Foto tidak dapat dikenali sebagai tanaman.',
+      }
+      return
+    }
+
+    const mapped = mapDiagnosis(res, API_ORIGIN)
+    uploadResult.value = {
+      saved: true,
+      photo: mapped.photo || photo,
+      title: mapped.name,
+      ok: mapped.ok,
+      conf: mapped.conf,
+      plant: res.ai_result?.plant || res.details?.plant || '-',
+      advice: mapped.advice || res.recommendation || 'Tidak ada rekomendasi tambahan.',
+    }
+    shotsData.value = [{ ...mapped, hue: 96 }, ...shotsData.value.filter((s) => typeof s.id === 'string')]
+    risksData.value = mapRisks(shotsData.value)
+  } catch (err) {
+    uploadError.value = err.message || 'Gagal menganalisis foto tanaman.'
+  } finally {
+    uploading.value = false
+  }
+}
 </script>
 
 <template>
@@ -183,10 +305,49 @@ const shown = computed(() => filtered.value.slice(0, visible.value))
         <p>Pantau pertumbuhan, prediksi kebutuhan, dan deteksi kesehatan tanaman.</p>
       </div>
       <div class="head__actions">
+        <input
+          ref="fileInput"
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+          hidden
+          @change="onFileSelected"
+        />
+        <button
+          type="button"
+          class="btn btn--solid"
+          :disabled="uploading || !canUpload"
+          :title="canUpload ? 'Maks 5 MB (JPG, PNG, WebP)' : 'Hanya admin atau operator yang dapat mengunggah'"
+          @click="fileInput?.click()"
+        >
+          <Icon name="leaf" />
+          {{ uploading ? 'Menganalisis…' : 'Upload Foto Tanaman' }}
+        </button>
         <button type="button" class="btn btn--ghost">
           <Icon name="calendar" />
-          10 Okt 2026
+          {{ todayLabel }}
         </button>
+      </div>
+    </section>
+
+    <p v-if="uploadError" class="notice notice--err" role="alert">{{ uploadError }}</p>
+
+    <section v-if="uploadResult" class="card upload-res">
+      <img :src="uploadResult.photo" :alt="uploadResult.title" class="upload-res__img" />
+      <div class="upload-res__body">
+        <div class="upload-res__top">
+          <div>
+            <h3>{{ uploadResult.title }}</h3>
+            <small>Tanaman: {{ uploadResult.plant }}</small>
+          </div>
+          <div class="upload-res__tags">
+            <span class="tag" :class="uploadResult.ok ? 'tag--ok' : 'tag--bad'">
+              {{ uploadResult.saved ? (uploadResult.ok ? 'Sehat' : 'Terdeteksi Masalah') : 'Tidak Disimpan' }}
+            </span>
+            <span v-if="uploadResult.conf != null" class="pill pill--soft">{{ uploadResult.conf }}%</span>
+            <button type="button" class="upload-res__close" aria-label="Tutup hasil" @click="clearUpload">×</button>
+          </div>
+        </div>
+        <p class="advice">{{ uploadResult.advice }}</p>
       </div>
     </section>
 
@@ -199,7 +360,7 @@ const shown = computed(() => filtered.value.slice(0, visible.value))
         <div class="panel__head">
           <div>
             <h3>Prediksi Pertumbuhan</h3>
-            <p>Selada Romaine · 5–11 Oktober 2026</p>
+            <p>{{ chartSubtitle }}</p>
           </div>
           <span class="pill pill--soft pill--trend">Tren meningkat</span>
         </div>
@@ -290,10 +451,15 @@ const shown = computed(() => filtered.value.slice(0, visible.value))
             <option value="issue">Terdeteksi masalah</option>
           </select>
         </label>
-        <button type="button" class="tool">
+        <label class="tool">
           <Icon name="calendar" />
-          8–10 Okt 2026
-        </button>
+          <select v-model="dateFilter" aria-label="Filter tanggal">
+            <option value="all">Semua tanggal</option>
+            <option value="today">Hari ini</option>
+            <option value="7d">7 hari terakhir</option>
+            <option value="30d">30 hari terakhir</option>
+          </select>
+        </label>
         <button type="button" class="tool" @click="newestFirst = !newestFirst">
           {{ newestFirst ? 'Terbaru ↓' : 'Terlama ↑' }}
         </button>
@@ -347,6 +513,60 @@ const shown = computed(() => filtered.value.slice(0, visible.value))
   color: var(--muted);
   background: var(--green-50);
   border-color: var(--line);
+}
+.notice--err {
+  color: var(--red-text);
+  background: #fde0e0;
+  border-color: #f5bcbc;
+}
+.upload-res {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 14px;
+}
+.upload-res__img {
+  width: 112px;
+  height: 112px;
+  flex: none;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+}
+.upload-res__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.upload-res__top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+.upload-res__top h3 {
+  margin: 0;
+  font-size: 14px;
+  color: var(--green-900);
+}
+.upload-res__top small {
+  font-size: 10px;
+  color: var(--muted);
+}
+.upload-res__tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.upload-res__close {
+  border: 0;
+  background: transparent;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
 }
 
 .row.row--chart {

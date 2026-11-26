@@ -36,7 +36,7 @@ async function onSubmit() {
       localStorage.setItem('tanova_refresh_token', response.refresh_token)
     }
 
-    const profile = await api.getMe()
+    const profile = response.user || (await api.getMe())
     localStorage.setItem('tanova_user', JSON.stringify(profile))
 
     emit('login-success', profile)

@@ -1,5 +1,71 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
 
+let refreshPromise = null
+
+function clearAuthStorage() {
+  localStorage.removeItem('tanova_token')
+  localStorage.removeItem('tanova_refresh_token')
+  localStorage.removeItem('tanova_user')
+  window.dispatchEvent(new Event('tanova:unauthorized'))
+}
+
+async function refreshAccessToken() {
+  if (refreshPromise) return refreshPromise
+
+  const refreshToken = localStorage.getItem('tanova_refresh_token')
+  if (!refreshToken) {
+    clearAuthStorage()
+    return null
+  }
+
+  refreshPromise = (async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      })
+      if (!res.ok) {
+        clearAuthStorage()
+        return null
+      }
+      const data = await res.json()
+      const newToken = data.access_token || data.token
+      if (newToken) localStorage.setItem('tanova_token', newToken)
+      if (data.refresh_token) localStorage.setItem('tanova_refresh_token', data.refresh_token)
+      return newToken || null
+    } catch {
+      return null
+    } finally {
+      refreshPromise = null
+    }
+  })()
+
+  return refreshPromise
+}
+
+async function authFetch(url, options = {}, { allowRefresh = true } = {}) {
+  const buildHeaders = () => {
+    const headers = { ...options.headers }
+    const token = localStorage.getItem('tanova_token')
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`
+    }
+    return headers
+  }
+
+  let response = await fetch(url, { ...options, headers: buildHeaders() })
+
+  if (response.status === 401 && allowRefresh && !options.signal?.aborted) {
+    const newToken = await refreshAccessToken()
+    if (newToken) {
+      response = await fetch(url, { ...options, headers: buildHeaders() })
+    }
+  }
+
+  return response
+}
+
 async function request(endpoint, options = {}) {
   const headers = {}
 
@@ -11,16 +77,14 @@ async function request(endpoint, options = {}) {
     Object.assign(headers, options.headers)
   }
 
-  const token = localStorage.getItem('tanova_token')
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`
-  }
+  const isAuthRoute = endpoint === '/auth/login' || endpoint === '/auth/refresh'
 
   try {
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-      ...options,
-      headers,
-    })
+    const response = await authFetch(
+      `${API_BASE_URL}${endpoint}`,
+      { ...options, headers },
+      { allowRefresh: !isAuthRoute },
+    )
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}))
@@ -207,10 +271,9 @@ export const api = {
       interval: String(interval),
     })
 
-    return fetch(`${API_BASE_URL}/dashboard/stream?${params.toString()}`, {
+    return authFetch(`${API_BASE_URL}/dashboard/stream?${params.toString()}`, {
       method: 'GET',
       headers: {
-        Authorization: `Bearer ${token}`,
         Accept: 'text/event-stream',
       },
       signal,
@@ -276,6 +339,19 @@ export const api = {
     })
   },
 
+  async deleteAlertNotification(id) {
+    return request(`/alerts/notifications/${id}`, {
+      method: 'DELETE',
+    })
+  },
+
+  async clearAlertNotifications(greenhouseId) {
+    const query = greenhouseId ? `?${new URLSearchParams({ greenhouse_id: greenhouseId })}` : ''
+    return request(`/alerts/notifications${query}`, {
+      method: 'DELETE',
+    })
+  },
+
   // ACTIVITY LOGS
   async getActivityLogs(options = {}) {
     const params = new URLSearchParams()
@@ -295,11 +371,8 @@ export const api = {
         params.set(k, String(v))
       }
     }
-    const token = localStorage.getItem('tanova_token')
     const query = params.toString()
-    const res = await fetch(`${API_BASE_URL}/activity-logs/export${query ? `?${query}` : ''}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    })
+    const res = await authFetch(`${API_BASE_URL}/activity-logs/export${query ? `?${query}` : ''}`)
     if (!res.ok) throw new Error('Gagal mengekspor log aktivitas.')
     return res.blob()
   },
@@ -312,10 +385,7 @@ export const api = {
         params.set(k, String(v))
       }
     }
-    const token = localStorage.getItem('tanova_token')
-    const res = await fetch(`${API_BASE_URL}/telemetry/export?${params.toString()}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    })
+    const res = await authFetch(`${API_BASE_URL}/telemetry/export?${params.toString()}`)
     if (!res.ok) throw new Error('Gagal mengekspor data telemetri.')
     return res.blob()
   },

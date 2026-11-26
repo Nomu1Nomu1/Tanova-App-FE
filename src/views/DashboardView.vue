@@ -2,13 +2,15 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import Icon from '../components/Icon.vue'
 import AddAlertModal from '../components/AddAlertModal.vue'
-import tipBurnPhoto from '../assets/image/2a.jpg'
 import { api } from '../services/api'
-import { mapDiagnosis, toList, toText } from '../services/aiMappers'
+
+// Foto diagnosis disajikan backend dari /uploads (di luar prefix /api/v1)
+const API_ORIGIN = new URL(import.meta.env.VITE_API_BASE_URL || '/', window.location.href).origin
 
 const props = defineProps({
   mode: { type: String, default: 'Otomatis' },
 })
+const emit = defineEmits(['navigate'])
 
 const isManual = computed(() => props.mode === 'Manual')
 
@@ -69,18 +71,12 @@ function pct(c) {
   return `${((c.value - c.min) / (c.max - c.min)) * 100}%`
 }
 
-const sensors = ref([
-  { name: 'Sensor pH', date: 'Kalibrasi terakhir: 9 September 2026', status: 'OK' },
-  { name: 'Sensor EC/TDS', date: 'Kalibrasi terakhir: 1 September 2026', status: 'OK' },
-  { name: 'Sensor DHT22', date: 'Kalibrasi terakhir: 3 September 2026', status: 'OK' },
-])
+const sensors = ref([])
+const greenhouse = ref(null)
 
 // Alerts
-const alerts = ref([
-  { text: 'Suhu air 32°C', badge: 'Warning', type: 'warning', icon: 'warn' },
-  { text: 'pH terlalu rendah', badge: 'Alert', type: 'alert', icon: 'info' },
-  { text: 'Level tangki sudah aman', badge: 'OK', type: 'ok', icon: 'bell' },
-])
+const alerts = ref([])
+const alertRaw = ref([])
 const showAlertModal = ref(false)
 const levelMap = {
   info: { type: 'ok', badge: 'Info', icon: 'info' },
@@ -88,20 +84,30 @@ const levelMap = {
   critical: { type: 'alert', badge: 'Alert', icon: 'info' },
 }
 
-// Activity logs
-const logs = ref([])
+// Log = gabungan diagnosis AI + notifikasi peringatan sensor (notifikasi AI tidak diulang, sudah ada di diagnosis)
 const isExporting = ref(false)
 
 // AI Diagnosis & Recommendations
-const latestDiagnosis = ref(null)
-const recommendations = ref([
-  'Pastikan pH larutan stabil antara 5.8–6.2.',
-  'Periksa debit pompa dan level tangki nutrisi.',
-  'Pantau kesehatan akar dan kelembapan greenhouse.',
-])
+const diagnosisRaw = ref([])
+const latestDiagnosis = computed(() => diagnosisRaw.value[0] || null)
+const recommendations = ref([])
+
+const logs = computed(() => {
+  const entries = [
+    ...alertRaw.value
+      .filter((a) => a.source !== 'ai')
+      .map((a) => ({ text: a.title || a.message || 'Peringatan sensor', ts: a.created_at })),
+    ...diagnosisRaw.value.map((d) => ({ text: `Diagnosis AI: ${d.label}`, ts: d.created_at || d.captured_at })),
+  ]
+  return entries
+    .sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts))
+    .slice(0, 5)
+    .map((e) => ({ text: e.text, date: `${formatDateIndo(e.ts)}, ${formatTimeWib(e.ts)}` }))
+})
 
 // Realtime & Polling control
 let refreshTimer = null
+let slowTimer = null
 let streamController = null
 let overviewRequestId = 0
 
@@ -158,9 +164,10 @@ const metrics = computed(() => {
   // 1. pH
   const phRaw = findMetricValue(m, ['ph', 'pH', 'ph_value', 'sensor_ph'])
   const phNum = phRaw !== null ? Number(phRaw) : null
-  const phVal = phNum !== null && !isNaN(phNum) ? phNum.toFixed(1) : '6.0'
-  let phNote = 'Target 5.8–6.2 · Stabil'
+  const phVal = phNum !== null && !isNaN(phNum) ? phNum.toFixed(1) : '-'
+  let phNote = 'Target 5.8–6.2 · Tidak ada data'
   if (phNum !== null && !isNaN(phNum)) {
+    phNote = 'Target 5.8–6.2 · Stabil'
     if (phNum < 5.8) phNote = 'Target 5.8–6.2 · Terlalu Rendah'
     else if (phNum > 6.2) phNote = 'Target 5.8–6.2 · Terlalu Tinggi'
   }
@@ -168,9 +175,10 @@ const metrics = computed(() => {
   // 2. EC / TDS
   const ecRaw = findMetricValue(m, ['ec', 'ec_value', 'tds', 'tds_value', 'sensor_ec'])
   const ecNum = ecRaw !== null ? Number(ecRaw) : null
-  const ecVal = ecNum !== null && !isNaN(ecNum) ? ecNum.toFixed(2) : '1.42'
-  let ecNote = 'Target 1.3–1.5 · Konsisten'
+  const ecVal = ecNum !== null && !isNaN(ecNum) ? ecNum.toFixed(2) : '-'
+  let ecNote = 'Target 1.3–1.5 · Tidak ada data'
   if (ecNum !== null && !isNaN(ecNum)) {
+    ecNote = 'Target 1.3–1.5 · Konsisten'
     if (ecNum < 1.3) ecNote = 'Target 1.3–1.5 · Nutrisi Rendah'
     else if (ecNum > 1.5) ecNote = 'Target 1.3–1.5 · Nutrisi Tinggi'
   }
@@ -178,9 +186,10 @@ const metrics = computed(() => {
   // 3. Suhu Air
   const tempRaw = findMetricValue(m, ['water_temp', 'temp_water', 'suhu_air', 'temp', 'temperature'])
   const tempNum = tempRaw !== null ? Number(tempRaw) : null
-  const tempVal = tempNum !== null && !isNaN(tempNum) ? Math.round(tempNum).toString() : '24'
-  let tempNote = 'Target 20–24 °C · Stabil'
+  const tempVal = tempNum !== null && !isNaN(tempNum) ? tempNum.toFixed(1) : '-'
+  let tempNote = 'Target 20–24 °C · Tidak ada data'
   if (tempNum !== null && !isNaN(tempNum)) {
+    tempNote = 'Target 20–24 °C · Stabil'
     if (tempNum < 20) tempNote = 'Target 20–24 °C · Suhu Rendah'
     else if (tempNum > 24) tempNote = 'Target 20–24 °C · Suhu Hangat'
   }
@@ -188,9 +197,10 @@ const metrics = computed(() => {
   // 4. Level Tangki
   const tankRaw = findMetricValue(m, ['tank_level', 'level_tangki', 'water_level', 'tank'])
   const tankNum = tankRaw !== null ? Number(tankRaw) : null
-  const tankVal = tankNum !== null && !isNaN(tankNum) ? Math.round(tankNum).toString() : '82'
-  let tankNote = 'Target ≥ 75% · Aman'
+  const tankVal = tankNum !== null && !isNaN(tankNum) ? Math.round(tankNum).toString() : '-'
+  let tankNote = 'Target ≥ 75% · Tidak ada data'
   if (tankNum !== null && !isNaN(tankNum)) {
+    tankNote = 'Target ≥ 75% · Aman'
     if (tankNum < 75) tankNote = 'Target ≥ 75% · Level Rendah'
   }
 
@@ -213,16 +223,18 @@ const headerSubtitle = computed(() => {
 
 const plantName = computed(() => {
   return (
+    greenhouse.value?.plant_type ||
     activeDevice.value?.plant_type ||
-    activeDevice.value?.crop_type ||
     overviewData.value?.crop ||
-    'Selada Romaine'
+    '-'
   )
 })
 
+// Umur tanam dihitung dari tanggal perangkat/greenhouse dibuat (backend belum punya tanggal tanam)
 const plantDays = computed(() => {
-  const days = activeDevice.value?.growth_day || overviewData.value?.growth_day || 45
-  return `${days} hari tanam`
+  const start = greenhouse.value?.created_at || activeDevice.value?.created_at
+  if (!start) return ''
+  return `${Math.max(0, Math.floor((Date.now() - Date.parse(start)) / 86_400_000))} hari tanam`
 })
 
 // ==============================
@@ -360,6 +372,8 @@ async function connectDashboardStream(deviceId) {
         processSseBlock(block)
       }
     }
+    // Stream ditutup server tanpa error: tetap ambil data lewat polling
+    if (!currentController.signal.aborted) startPolling(deviceId)
   } catch {
     if (currentController.signal.aborted) return
     startPolling(deviceId)
@@ -397,40 +411,40 @@ function stopRealtime() {
 async function loadCalibrations(deviceId) {
   try {
     const res = await api.getCalibrations(deviceId)
-    const list = unwrapResponse(res)
-    const items = Array.isArray(list) ? list : (list?.items || [])
-
-    if (items.length > 0) {
-      sensors.value = items.map((item) => {
-        const calDate =
-          item.last_calibrated_at || item.last_calibrated || item.calibrated_at || item.updated_at
-        return {
-          name: item.sensor_name || item.name || `Sensor ${item.sensor_type || item.type || ''}`,
-          date: calDate ? `Kalibrasi terakhir: ${formatDateIndo(calDate)}` : 'Kalibrasi dalam batas normal',
-          status: item.needs_calibration ? 'Perlu Kalibrasi' : 'OK',
-        }
-      })
-    } else if (activeDevice.value?.sensors?.length > 0) {
-      sensors.value = activeDevice.value.sensors.map((s) => ({
-        name: s.name || `Sensor ${s.type || ''}`,
-        date: s.last_calibrated
-          ? `Kalibrasi terakhir: ${formatDateIndo(s.last_calibrated)}`
-          : 'Kalibrasi dalam batas normal',
-        status: s.needs_calibration ? 'Perlu Kalibrasi' : 'OK',
-      }))
+    const statusLabel = {
+      ok: 'OK',
+      due_soon: 'Segera Kalibrasi',
+      overdue: 'Perlu Kalibrasi',
+      never: 'Belum Dikalibrasi',
     }
+    sensors.value = getArrayResponse(res).map((item) => ({
+      name: item.sensor_name || `Sensor ${item.sensor_type || ''}`,
+      date: item.last_calibrated_at
+        ? `Kalibrasi terakhir: ${formatDateIndo(item.last_calibrated_at)}`
+        : 'Belum pernah dikalibrasi',
+      status: statusLabel[item.status] || 'OK',
+    }))
   } catch (error) {
     console.warn('Gagal memuat kalibrasi:', error)
+  }
+}
+
+async function loadGreenhouse() {
+  try {
+    const ghId = activeDevice.value?.greenhouse_id
+    greenhouse.value = getArrayResponse(await api.getGreenhouses()).find((g) => g.id === ghId) || null
+  } catch (error) {
+    console.warn('Gagal memuat greenhouse:', error)
   }
 }
 
 async function loadAlerts() {
   try {
     const res = await api.getAlertNotifications({ limit: 5 })
-    const list = unwrapResponse(res)
-    const items = Array.isArray(list) ? list : (list?.items || list?.notifications || [])
+    const items = getArrayResponse(res)
+    alertRaw.value = items
 
-    if (items.length > 0) {
+    {
       alerts.value = items.map((item) => {
         const sev = (item.severity || item.level || 'warning').toLowerCase()
         let type = 'warning'
@@ -449,7 +463,7 @@ async function loadAlerts() {
 
         return {
           id: item.id,
-          text: item.message || item.text || item.title || item.name || 'Peringatan sensor',
+          text: item.title || item.message || 'Peringatan sensor',
           badge: item.badge || badge,
           type,
           icon,
@@ -499,27 +513,6 @@ async function handleAddAlert(data) {
   }
 }
 
-async function loadActivityLogs() {
-  try {
-    const res = await api.getActivityLogs({ limit: 5 })
-    const list = unwrapResponse(res)
-    const items = Array.isArray(list) ? list : (list?.items || list?.logs || [])
-
-    if (items.length > 0) {
-      logs.value = items.map((item) => ({
-        text: item.description || item.action || item.message || 'Aktivitas sistem',
-        date: item.created_at ? formatDateIndo(item.created_at) : 'Baru saja',
-      }))
-    } else {
-      logs.value = [
-        { text: 'Sistem monitoring aktif', date: formatDateIndo(new Date()) },
-      ]
-    }
-  } catch (error) {
-    console.warn('Gagal memuat log aktivitas:', error)
-  }
-}
-
 async function handleExportCsv() {
   if (isExporting.value) return
   isExporting.value = true
@@ -554,49 +547,53 @@ async function handleExportCsv() {
 // ==============================
 async function loadAiData() {
   try {
-    const devId = activeDevice.value?.id || activeDevice.value?._id
+    const ghId = activeDevice.value?.greenhouse_id
+    const scopeQuery = ghId ? { greenhouse_id: ghId } : {}
     const [diagRes, recoRes] = await Promise.allSettled([
-      api.getAiDiagnoses({ limit: 1, ...(devId ? { device_id: devId } : {}) }),
-      api.getAiRecommendations({ limit: 3, ...(devId ? { device_id: devId } : {}) }),
+      api.getAiDiagnoses({ limit: 5, ...scopeQuery }),
+      api.getAiRecommendations({ limit: 3, ...scopeQuery }),
     ])
 
     if (diagRes.status === 'fulfilled') {
-      const data = unwrapResponse(diagRes.value)
-      const list = toList(data)
-      if (list.length > 0) {
-        latestDiagnosis.value = mapDiagnosis(list[0])
-      }
+      diagnosisRaw.value = getArrayResponse(diagRes.value)
     }
 
     if (recoRes.status === 'fulfilled') {
-      const data = unwrapResponse(recoRes.value)
-      const items = toList(data)
-      if (items.length > 0) {
-        const mapped = items.map((i) => toText(i)).filter(Boolean)
-        if (mapped.length > 0) recommendations.value = mapped
-      }
+      // Pakai langkah tindakan bila ada, jika tidak teks rekomendasi utamanya
+      recommendations.value = getArrayResponse(recoRes.value)
+        .flatMap((r) => (r.recommended_actions?.length ? r.recommended_actions : [r.recommendation]))
+        .map((a) => (typeof a === 'string' ? a : a?.text || a?.action))
+        .filter(Boolean)
+        .slice(0, 4)
     }
   } catch (error) {
     console.warn('Gagal memuat data AI:', error)
   }
 }
 
-const diagnosisTitle = computed(() => latestDiagnosis.value?.name || 'Tip Burn (Defisiensi Kalsium)')
-const diagnosisConfidence = computed(() => latestDiagnosis.value?.conf ?? 87.3)
-const diagnosisSeverity = computed(() => {
-  if (latestDiagnosis.value?.ok) return 'Sehat'
-  return 'Sedang'
+const SEVERITY_LABEL = { none: 'Sehat', low: 'Ringan', medium: 'Sedang', high: 'Tinggi' }
+
+const diagnosisTitle = computed(() => latestDiagnosis.value?.label || 'Belum ada diagnosis')
+// confidence di backend 0–1
+const diagnosisConfidence = computed(() => {
+  const c = latestDiagnosis.value?.confidence
+  return c === null || c === undefined ? 0 : Math.round(c * 1000) / 10
 })
+const diagnosisSeverity = computed(() => SEVERITY_LABEL[latestDiagnosis.value?.severity] || '-')
 const diagnosisBadgeClass = computed(() => {
-  if (latestDiagnosis.value?.ok) return 'pill--on'
-  return 'pill--orange'
+  return latestDiagnosis.value?.severity === 'none' ? 'pill--on' : 'pill--orange'
 })
-const diagnosisPhoto = computed(() => latestDiagnosis.value?.photo || tipBurnPhoto)
+const diagnosisPhoto = computed(() => {
+  const url = latestDiagnosis.value?.image_url
+  if (!url) return null
+  return /^https?:/.test(url) ? url : `${API_ORIGIN}${url.startsWith('/') ? url : `/${url}`}`
+})
 const diagnosisSubtitle = computed(() => {
-  const plant = plantName.value
-  const zone = latestDiagnosis.value?.zone || 'Zona 1'
-  const time = latestDiagnosis.value?.time || '08:35 WIB'
-  return `Tanaman: ${plant} · ${zone} · ${time}`
+  const d = latestDiagnosis.value
+  if (!d) return `Tanaman: ${plantName.value}`
+  const t = d.captured_at || d.created_at
+  const source = d.details?.source === 'camera' || d.device_id ? 'Kamera ESP' : 'Upload'
+  return `Tanaman: ${d.details?.plant || plantName.value} · ${source} · ${formatDateIndo(t)}, ${formatTimeWib(t)}`
 })
 
 // ==============================
@@ -617,17 +614,16 @@ async function initDashboard() {
       await Promise.allSettled([
         fetchOverview(devId),
         loadCalibrations(devId),
+        loadGreenhouse(),
         loadAlerts(),
-        loadActivityLogs(),
         loadAiData(),
       ])
 
       connectDashboardStream(devId)
     } else {
-      // Tidak ada device, tetap muat notifikasi & logs umum
+      // Tidak ada device, tetap muat notifikasi & diagnosis umum
       await Promise.allSettled([
         loadAlerts(),
-        loadActivityLogs(),
         loadAiData(),
       ])
     }
@@ -653,12 +649,18 @@ watch(
   },
 )
 
-onMounted(() => {
-  initDashboard()
+onMounted(async () => {
+  await initDashboard()
+  // Alert & diagnosis tidak ada di stream SSE, jadi disegarkan berkala
+  slowTimer = window.setInterval(() => {
+    loadAlerts()
+    loadAiData()
+  }, 30000)
 })
 
 onBeforeUnmount(() => {
   stopRealtime()
+  clearInterval(slowTimer)
 })
 </script>
 
@@ -670,7 +672,7 @@ onBeforeUnmount(() => {
         <p>{{ headerSubtitle }}</p>
       </div>
       <div class="head__actions">
-        <button type="button" class="btn btn--ghost">
+        <button type="button" class="btn btn--ghost" title="Segarkan data dashboard" @click="initDashboard">
           <Icon name="calendar" />
           {{ headerButtonDate }}
         </button>
@@ -686,7 +688,9 @@ onBeforeUnmount(() => {
       <article v-for="m in metrics" :key="m.label" class="card metric">
         <div class="metric__top">
           <span>{{ m.label }}</span>
-          <i class="chip"><Icon :name="m.icon" /></i>
+          <i class="chip">
+            <Icon :name="m.icon" />
+          </i>
         </div>
         <div class="metric__value">
           <b>{{ m.value }}</b><small>{{ m.unit }}</small>
@@ -711,15 +715,8 @@ onBeforeUnmount(() => {
             <Icon name="drop" />
             <b>Pompa Air</b>
           </span>
-          <button
-            v-if="isManual"
-            type="button"
-            class="pill pill-btn"
-            :class="pumpOn ? 'pill--on' : 'pill--off'"
-            :aria-pressed="pumpOn"
-            :disabled="isTogglingPump"
-            @click="togglePump"
-          >
+          <button v-if="isManual" type="button" class="pill pill-btn" :class="pumpOn ? 'pill--on' : 'pill--off'"
+            :aria-pressed="pumpOn" :disabled="isTogglingPump" @click="togglePump">
             {{ isTogglingPump ? '...' : (pumpOn ? 'ON' : 'OFF') }}
           </button>
           <span v-else class="pill" :class="pumpOn ? 'pill--on' : 'pill--off'">
@@ -733,16 +730,8 @@ onBeforeUnmount(() => {
             <Icon name="tank" />
             <label class="slider__wrap">
               <b>{{ c.name }}</b>
-              <input
-                v-model.number="c.value"
-                class="slider"
-                type="range"
-                :min="c.min"
-                :max="c.max"
-                :step="c.step"
-                :style="{ '--pct': pct(c) }"
-                :aria-label="c.name"
-              />
+              <input v-model.number="c.value" class="slider" type="range" :min="c.min" :max="c.max" :step="c.step"
+                :style="{ '--pct': pct(c) }" :aria-label="c.name" />
             </label>
             <span class="value-chip">{{ c.value.toFixed(c.decimals) }} {{ c.unit }}</span>
           </div>
@@ -771,6 +760,11 @@ onBeforeUnmount(() => {
           <span class="pill pill--soft">{{ alerts.length }} Notifikasi</span>
         </div>
 
+        <div v-if="alerts.length === 0" class="alert alert--ok">
+          <span class="item__left">
+            <Icon name="bell" /><b>Tidak ada peringatan</b>
+          </span>
+        </div>
         <div v-for="(a, idx) in alerts" :key="a.id || idx" class="alert" :class="`alert--${a.type}`">
           <span class="item__left">
             <Icon :name="a.icon" />
@@ -793,15 +787,10 @@ onBeforeUnmount(() => {
       <article class="card panel">
         <div class="panel__head">
           <div>
-            <h3>Log Aktivitas &amp; Telemetri</h3>
+            <h3>Log Diagnosis &amp; Peringatan</h3>
             <p>{{ logs.length }} entri terbaru</p>
           </div>
-          <button
-            type="button"
-            class="btn btn--tiny"
-            :disabled="isExporting"
-            @click="handleExportCsv"
-          >
+          <button type="button" class="btn btn--tiny" :disabled="isExporting" @click="handleExportCsv">
             <Icon name="download" />
             {{ isExporting ? 'Mengunduh...' : 'Ekspor CSV' }}
           </button>
@@ -810,7 +799,7 @@ onBeforeUnmount(() => {
         <div v-if="logs.length === 0" class="item item--log">
           <span class="item__left">
             <Icon name="bell" />
-            <b>Belum ada log aktivitas terbaru</b>
+            <b>Belum ada diagnosis atau peringatan</b>
           </span>
         </div>
         <div v-for="(l, i) in logs" :key="i" class="item item--log">
@@ -828,7 +817,7 @@ onBeforeUnmount(() => {
             <h3>Diagnosis AI Tanaman</h3>
             <p>Deteksi otomatis dari kamera node</p>
           </div>
-          <button type="button" class="btn btn--tiny" @click="loadAiData">
+          <button type="button" class="btn btn--tiny" @click="emit('navigate', 'ai')">
             <Icon name="history" />
             Riwayat
           </button>
@@ -854,17 +843,14 @@ onBeforeUnmount(() => {
 
         <h4>Rekomendasi AI</h4>
         <ul class="reco">
+          <li v-if="recommendations.length === 0">Belum ada rekomendasi tindakan.</li>
           <li v-for="(r, i) in recommendations" :key="i">{{ r }}</li>
         </ul>
       </article>
     </section>
 
-    <AddAlertModal
-      v-if="showAlertModal"
-      :device-name="activeDevice?.name || 'Tanova Grove – 1'"
-      @close="showAlertModal = false"
-      @save="handleAddAlert"
-    />
+    <AddAlertModal v-if="showAlertModal" :device-name="activeDevice?.name || 'Tanova Grove – 1'"
+      @close="showAlertModal = false" @save="handleAddAlert" />
   </div>
 </template>
 
@@ -879,31 +865,38 @@ onBeforeUnmount(() => {
   background: var(--green-100);
   border-radius: 8px;
 }
+
 .item--lg {
   padding: 10px 12px;
   font-size: 11px;
 }
+
 .item--log {
   padding: 13px 14px;
 }
+
 .item__left {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
 }
+
 .item__left .icon {
   width: 13px;
   height: 13px;
 }
+
 .item small {
   display: block;
   font-size: 8.5px;
   color: var(--muted);
 }
+
 .item--log small {
   font-size: 9px;
 }
+
 .ok {
   font-size: 9px;
 }
@@ -916,6 +909,7 @@ onBeforeUnmount(() => {
   border: 0;
   cursor: pointer;
 }
+
 .pill--off {
   padding: 3px 12px;
   color: var(--muted);
@@ -927,6 +921,7 @@ onBeforeUnmount(() => {
   gap: 10px;
   padding: 9px 12px;
 }
+
 .slider__wrap {
   flex: 1;
   min-width: 0;
@@ -936,6 +931,7 @@ onBeforeUnmount(() => {
   font-size: 10px;
   color: var(--green-900);
 }
+
 .slider {
   --pct: 50%;
   width: 100%;
@@ -948,6 +944,7 @@ onBeforeUnmount(() => {
   appearance: none;
   -webkit-appearance: none;
 }
+
 .slider::-webkit-slider-thumb {
   width: 11px;
   height: 11px;
@@ -957,6 +954,7 @@ onBeforeUnmount(() => {
   appearance: none;
   -webkit-appearance: none;
 }
+
 .slider::-moz-range-thumb {
   width: 11px;
   height: 11px;
@@ -964,9 +962,11 @@ onBeforeUnmount(() => {
   border: 0;
   border-radius: 50%;
 }
+
 .slider:focus-visible {
   box-shadow: 0 0 0 3px rgba(147, 186, 57, 0.35);
 }
+
 .value-chip {
   flex: none;
   min-width: 50px;
@@ -990,10 +990,12 @@ onBeforeUnmount(() => {
   font-size: 10px;
   border-radius: 8px;
 }
+
 .alert .item__left .icon {
   width: 13px;
   height: 13px;
 }
+
 .alert .badge {
   padding: 3px 10px;
   font-size: 9px;
@@ -1001,24 +1003,30 @@ onBeforeUnmount(() => {
   color: #fff;
   border-radius: 999px;
 }
+
 .alert--warning {
   color: var(--yellow-text);
   background: var(--yellow-bg);
 }
+
 .alert--warning .badge {
   background: var(--orange);
 }
+
 .alert--alert {
   color: var(--red-text);
   background: var(--red-bg);
 }
+
 .alert--alert .badge {
   background: var(--red);
 }
+
 .alert--ok {
   color: var(--green-900);
   background: #dbe9b9;
 }
+
 .alert--ok .badge {
   background: var(--green-700);
 }
@@ -1040,9 +1048,11 @@ onBeforeUnmount(() => {
   background: var(--green-100);
   border-radius: 8px;
 }
+
 .plant .icon {
   color: var(--green-700);
 }
+
 .plant small {
   font-size: 8.5px;
   color: var(--muted);
@@ -1053,6 +1063,7 @@ onBeforeUnmount(() => {
   display: flex;
   gap: 10px;
 }
+
 .diag__img {
   display: grid;
   place-items: center;
@@ -1064,16 +1075,19 @@ onBeforeUnmount(() => {
   border-radius: 8px;
   overflow: hidden;
 }
+
 .diag__img img {
   display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
+
 .diag__img .icon {
   width: 24px;
   height: 24px;
 }
+
 .diag__info {
   flex: 1;
   min-width: 0;
@@ -1081,6 +1095,7 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 4px;
 }
+
 .diag__title {
   display: flex;
   align-items: flex-start;
@@ -1089,23 +1104,27 @@ onBeforeUnmount(() => {
   font-size: 10px;
   color: var(--green-900);
 }
+
 .diag__conf {
   display: flex;
   justify-content: space-between;
   font-size: 9px;
   color: var(--muted);
 }
+
 .bar {
   height: 4px;
   background: #dbe5c3;
   border-radius: 999px;
   overflow: hidden;
 }
+
 .bar i {
   display: block;
   height: 100%;
   background: var(--green-700);
 }
+
 .diag__info small {
   font-size: 8px;
   color: var(--muted);
@@ -1121,6 +1140,7 @@ onBeforeUnmount(() => {
   background: var(--green-100);
   border-radius: 8px;
 }
+
 .reco li {
   position: relative;
   padding-left: 12px;
@@ -1128,6 +1148,7 @@ onBeforeUnmount(() => {
   line-height: 1.35;
   color: var(--muted);
 }
+
 .reco li::before {
   content: '';
   position: absolute;

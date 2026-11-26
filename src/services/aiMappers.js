@@ -113,7 +113,7 @@ export function mapDiagnosis(item, assetBase = '') {
 
   let photo = pick(item, ['photo_url', 'image_url', 'photo', 'image', 'picture_url', 'thumbnail_url', 'file_url'], null)
   if (typeof photo !== 'string') photo = null
-  else if (photo.startsWith('/')) photo = assetBase + photo
+  else if (!/^https?:/.test(photo)) photo = assetBase + (photo.startsWith('/') ? photo : `/${photo}`)
 
   const ts = parseTime(pick(item, ['captured_at', 'created_at', 'taken_at', 'timestamp', 'date']))
 

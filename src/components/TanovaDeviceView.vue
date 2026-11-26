@@ -490,18 +490,6 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="tanova-device-container">
-    <!-- Top Header Bar -->
-    <div class="top-header">
-      <div class="brand-box">
-        <div class="brand-icon"><i class="fa-solid fa-seedling"></i></div>
-        <span class="brand-title">Tanova</span>
-      </div>
-      <div class="top-actions">
-        <button class="icon-btn-top" title="Notifikasi"><i class="fa-solid fa-bell"></i></button>
-        <div class="profile-avatar-top">BS</div>
-      </div>
-    </div>
-
     <!-- Header Section -->
     <div class="header-section">
       <div>
