@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import SignInView from './views/SignInView.vue'
 import AppLayout from './components/AppLayout.vue'
 import DashboardView from './views/DashboardView.vue'
@@ -12,6 +12,7 @@ const currentUser = ref(null)
 const page = ref('dashboard') // 'dashboard' | 'device' | 'ai' | 'profile'
 
 onMounted(() => {
+  window.addEventListener('tanova:unauthorized', handleLogout)
   const token = localStorage.getItem('tanova_token')
   const savedUser = localStorage.getItem('tanova_user')
 
@@ -23,6 +24,10 @@ onMounted(() => {
       handleLogout()
     }
   }
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('tanova:unauthorized', handleLogout)
 })
 
 function handleLoginSuccess(profile) {
@@ -62,7 +67,7 @@ const activeMenu = computed(() => (page.value === 'profile' ? 'dashboard' : page
     @edit-profile="page = 'profile'"
     @logout="handleLogout"
   >
-    <DashboardView v-if="page === 'dashboard'" :mode="mode" />
+    <DashboardView v-if="page === 'dashboard'" :mode="mode" @navigate="page = $event" />
     <AiView v-else-if="page === 'ai'" />
     <TanovaDeviceView v-else-if="page === 'device'" />
     <p v-else class="placeholder">

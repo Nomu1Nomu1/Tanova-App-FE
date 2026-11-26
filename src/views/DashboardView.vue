@@ -10,6 +10,7 @@ const API_ORIGIN = new URL(import.meta.env.VITE_API_BASE_URL || '/', window.loca
 const props = defineProps({
   mode: { type: String, default: 'Otomatis' },
 })
+const emit = defineEmits(['navigate'])
 
 const isManual = computed(() => props.mode === 'Manual')
 
@@ -546,10 +547,11 @@ async function handleExportCsv() {
 // ==============================
 async function loadAiData() {
   try {
-    const devId = activeDevice.value?.id || activeDevice.value?._id
+    const ghId = activeDevice.value?.greenhouse_id
+    const scopeQuery = ghId ? { greenhouse_id: ghId } : {}
     const [diagRes, recoRes] = await Promise.allSettled([
-      api.getAiDiagnoses({ limit: 5, ...(devId ? { device_id: devId } : {}) }),
-      api.getAiRecommendations({ limit: 3, ...(devId ? { device_id: devId } : {}) }),
+      api.getAiDiagnoses({ limit: 5, ...scopeQuery }),
+      api.getAiRecommendations({ limit: 3, ...scopeQuery }),
     ])
 
     if (diagRes.status === 'fulfilled') {
@@ -584,13 +586,14 @@ const diagnosisBadgeClass = computed(() => {
 const diagnosisPhoto = computed(() => {
   const url = latestDiagnosis.value?.image_url
   if (!url) return null
-  return /^https?:/.test(url) ? url : `${API_ORIGIN}${url}`
+  return /^https?:/.test(url) ? url : `${API_ORIGIN}${url.startsWith('/') ? url : `/${url}`}`
 })
 const diagnosisSubtitle = computed(() => {
   const d = latestDiagnosis.value
   if (!d) return `Tanaman: ${plantName.value}`
   const t = d.captured_at || d.created_at
-  return `Tanaman: ${plantName.value} · ${formatDateIndo(t)}, ${formatTimeWib(t)}`
+  const source = d.details?.source === 'camera' || d.device_id ? 'Kamera ESP' : 'Upload'
+  return `Tanaman: ${d.details?.plant || plantName.value} · ${source} · ${formatDateIndo(t)}, ${formatTimeWib(t)}`
 })
 
 // ==============================
@@ -669,7 +672,7 @@ onBeforeUnmount(() => {
         <p>{{ headerSubtitle }}</p>
       </div>
       <div class="head__actions">
-        <button type="button" class="btn btn--ghost">
+        <button type="button" class="btn btn--ghost" title="Segarkan data dashboard" @click="initDashboard">
           <Icon name="calendar" />
           {{ headerButtonDate }}
         </button>
@@ -814,7 +817,7 @@ onBeforeUnmount(() => {
             <h3>Diagnosis AI Tanaman</h3>
             <p>Deteksi otomatis dari kamera node</p>
           </div>
-          <button type="button" class="btn btn--tiny" @click="loadAiData">
+          <button type="button" class="btn btn--tiny" @click="emit('navigate', 'ai')">
             <Icon name="history" />
             Riwayat
           </button>
