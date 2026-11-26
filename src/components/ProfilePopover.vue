@@ -1,27 +1,71 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import Icon from './Icon.vue'
+import EditProfileModal from './EditProfileModal.vue'
+import { api } from '../services/api'
 
-const props = defineProps({
-  profile: {
-    type: Object,
-    default: () => ({
-      name: 'Budi Santoso',
-      email: 'budi.santoso@example.com',
-      status: 'Aktif',
-      device: 'Tanova Grove – 1',
-      joined: '1 September 2026',
-      timezone: 'WIB (UTC+7)',
-    }),
-  },
-})
 const emit = defineEmits(['edit', 'logout'])
 
 const open = ref(false)
 const root = ref(null)
 
+// Ubah respons backend (GET /users/me) jadi bentuk yang dipakai template
+function mapUser(u) {
+  if (!u) return { name: '-', email: '-', status: '-', device: '-', joined: '-' }
+
+  // getMe mengembalikan `greenhouses` (array) dan `greenhouse` (satu objek)
+  const list = Array.isArray(u.greenhouses) && u.greenhouses.length
+    ? u.greenhouses
+    : u.greenhouse
+      ? [u.greenhouse]
+      : []
+  const greenhouses = list.map((g) => g.name || g.id).join(', ')
+
+  return {
+    name: u.name || u.username || '-',
+    email: u.email || '-',
+    status: u.is_active === false ? 'Nonaktif' : 'Aktif',
+    device: greenhouses || '-',
+    joined: u.created_at
+      ? new Date(u.created_at).toLocaleDateString('id-ID', {
+          day: 'numeric',
+          month: 'long',
+          year: 'numeric',
+        })
+      : '-',
+  }
+}
+
+function readSaved() {
+  try {
+    return JSON.parse(localStorage.getItem('tanova_user'))
+  } catch {
+    return null
+  }
+}
+
+// Tampilkan dulu data tersimpan dari login, lalu diperbarui dari backend
+const rawUser = ref(readSaved())
+const profile = ref(mapUser(rawUser.value))
+const showEdit = ref(false)
+
+function applyUser(u) {
+  rawUser.value = u
+  profile.value = mapUser(u)
+}
+
+async function loadProfile() {
+  try {
+    const me = await api.getMe()
+    localStorage.setItem('tanova_user', JSON.stringify(me))
+    applyUser(me)
+  } catch (error) {
+    console.error('Gagal memuat profil:', error)
+  }
+}
+
 const initials = computed(() =>
-  props.profile.name
+  profile.value.name
     .split(' ')
     .filter(Boolean)
     .slice(0, 2)
@@ -30,10 +74,9 @@ const initials = computed(() =>
 )
 
 const rows = computed(() => [
-  { label: 'Status akun', value: props.profile.status, badge: true },
-  { label: 'Perangkat', value: props.profile.device, bold: true },
-  { label: 'Bergabung', value: props.profile.joined, bold: true },
-  { label: 'Zona waktu', value: props.profile.timezone, bold: true },
+  { label: 'Status akun', value: profile.value.status, badge: true },
+  { label: 'Perangkat', value: profile.value.device, bold: true },
+  { label: 'Bergabung', value: profile.value.joined, bold: true },
 ])
 
 function close() {
@@ -41,7 +84,7 @@ function close() {
 }
 function onEdit() {
   close()
-  emit('edit')
+  showEdit.value = true
 }
 function onDocDown(e) {
   if (root.value && !root.value.contains(e.target)) close()
@@ -50,6 +93,7 @@ function onKey(e) {
   if (e.key === 'Escape') close()
 }
 onMounted(() => {
+  loadProfile()
   document.addEventListener('mousedown', onDocDown)
   window.addEventListener('keydown', onKey)
 })
@@ -81,17 +125,11 @@ onBeforeUnmount(() => {
         </button>
       </header>
 
-      <p class="note">
-        <Icon name="info" />
-        Data contoh untuk tampilan UI, bukan informasi pengguna sebenarnya.
-      </p>
-
       <div class="person">
         <span class="avatar">{{ initials }}</span>
         <div>
           <b>{{ profile.name }}</b>
           <span class="email">{{ profile.email }}</span>
-          <em class="sample">DATA CONTOH</em>
         </div>
       </div>
 
@@ -121,6 +159,13 @@ onBeforeUnmount(() => {
         </button>
       </div>
     </section>
+
+    <EditProfileModal
+      v-if="showEdit"
+      :user="rawUser"
+      @close="showEdit = false"
+      @saved="applyUser"
+    />
   </div>
 </template>
 
@@ -198,24 +243,6 @@ onBeforeUnmount(() => {
   height: 14px;
 }
 
-.note {
-  display: flex;
-  gap: 8px;
-  margin: 0 0 14px;
-  padding: 9px 10px;
-  font-size: 10px;
-  line-height: 1.4;
-  color: var(--muted);
-  background: var(--green-100);
-  border-radius: 8px;
-}
-.note .icon {
-  width: 12px;
-  height: 12px;
-  margin-top: 1px;
-  color: var(--green-700);
-}
-
 .person {
   display: flex;
   align-items: center;
@@ -243,17 +270,6 @@ onBeforeUnmount(() => {
   margin: 1px 0 4px;
   font-size: 10.5px;
   color: var(--muted);
-}
-.sample {
-  display: inline-block;
-  padding: 2px 6px;
-  font-size: 8px;
-  font-style: normal;
-  font-weight: 700;
-  letter-spacing: 0.3px;
-  color: var(--green-700);
-  background: var(--green-100);
-  border-radius: 4px;
 }
 
 hr {
