@@ -1524,4 +1524,91 @@ async function handleDeleteUser(usr) {
   color: #fff;
   border-color: #d9534f;
 }
+
+/* ===== Responsif HP & tablet =====
+   Hanya menambah aturan di layar kecil, tampilan desktop tidak berubah. */
+@media (max-width: 768px) {
+  .admin-container {
+    padding: 14px;
+  }
+
+  .admin-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 16px;
+  }
+  .admin-title {
+    font-size: 18px;
+  }
+  .admin-header-right {
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: space-between;
+  }
+
+  /* Tiga tab bisa digeser ke samping, tidak saling menumpuk */
+  .admin-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .tab-btn {
+    flex: none;
+    white-space: nowrap;
+  }
+
+  .admin-card {
+    padding: 16px;
+  }
+  .card-header-flex {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+  .card-header-flex .btn-primary-admin {
+    justify-content: center;
+  }
+
+  /* Tabel tetap utuh dan bisa digeser ke samping di dalam kartunya */
+  .table-wrapper {
+    -webkit-overflow-scrolling: touch;
+  }
+  .admin-table {
+    min-width: 720px;
+  }
+  .admin-table th {
+    white-space: nowrap;
+  }
+  .btn-action {
+    width: 36px;
+    height: 36px;
+  }
+
+  /* Jendela tambah / edit */
+  .modal-card {
+    max-width: calc(100% - 24px);
+    max-height: 92vh;
+    max-height: 92dvh;
+  }
+  .btn-close {
+    padding: 8px;
+  }
+  .form-row {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+  /* 16px mencegah layar HP (iPhone) memperbesar sendiri saat kolom diketik */
+  .form-input {
+    font-size: 16px;
+  }
+  .modal-footer {
+    flex-direction: column-reverse;
+  }
+  .modal-footer button {
+    width: 100%;
+    justify-content: center;
+  }
+}
 </style>

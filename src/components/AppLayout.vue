@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import Icon from './Icon.vue'
 import ProfilePopover from './ProfilePopover.vue'
 import heroIllustration from '../assets/icons/hero-illustration.svg'
@@ -28,12 +28,52 @@ function pickMode(m) {
   mode.value = m
   modeOpen.value = false
 }
+
+// ==============================
+// SIDEBAR DRAWER (khusus HP)
+// ==============================
+const sideOpen = ref(false)
+
+function openSide() {
+  sideOpen.value = true
+}
+
+function closeSide() {
+  sideOpen.value = false
+}
+
+// Navigasi tetap sama, di HP drawer ikut tertutup setelah memilih menu
+function goTo(key) {
+  emit('navigate', key)
+  closeSide()
+}
+
+function onKeydown(e) {
+  if (e.key === 'Escape' && sideOpen.value) closeSide()
+}
+
+// Kunci scroll halaman saat drawer terbuka
+watch(sideOpen, (open) => {
+  document.body.style.overflow = open ? 'hidden' : ''
+})
+
+onMounted(() => {
+  window.addEventListener('keydown', onKeydown)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeydown)
+  document.body.style.overflow = ''
+})
 </script>
 
 <template>
   <div class="dash">
+    <!-- Latar gelap di belakang drawer (hanya tampil di HP) -->
+    <div v-if="sideOpen" class="side__backdrop" aria-hidden="true" @click="closeSide"></div>
+
     <!-- ========== SIDEBAR ========== -->
-    <aside class="side">
+    <aside id="dash-sidebar" class="side" :class="{ 'side--open': sideOpen }">
       <div>
         <div class="side__brand">
           <span class="logo"><img :src="heroIllustration" alt="Tanova" /></span>
@@ -73,7 +113,7 @@ function pickMode(m) {
             type="button"
             class="nav__item"
             :class="{ 'nav__item--active': active === m.key }"
-            @click="emit('navigate', m.key)"
+            @click="goTo(m.key)"
           >
             <Icon :name="active === m.key ? m.icon + 'White' : m.icon" :fallback="m.icon" />
             <span>{{ m.key === 'dashboard' ? dashboardLabel : m.label }}</span>
@@ -95,6 +135,20 @@ function pickMode(m) {
     <main class="main">
       <header class="topbar">
         <div class="topbar__brand">
+          <!-- Tombol menu: hanya tampil di HP -->
+          <button
+            type="button"
+            class="topbar__menu"
+            aria-label="Buka menu"
+            aria-controls="dash-sidebar"
+            :aria-expanded="sideOpen"
+            @click="openSide"
+          >
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" aria-hidden="true">
+              <path d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
           <span class="logo logo--sm"><img :src="heroIllustration" alt="Tanova" /></span>
           <strong>Tanova</strong>
         </div>
@@ -548,9 +602,86 @@ function pickMode(m) {
   height: 18px;
 }
 
+/* Tombol hamburger & latar drawer: disembunyikan di desktop */
+.topbar__menu {
+  display: none;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  color: var(--green-900);
+  background: #fff;
+  border: 0;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.side__backdrop {
+  display: none;
+}
+
+/* =====================================================
+   RESPONSIVE (HP & tablet kecil)
+   Sidebar berubah jadi drawer yang dibuka lewat tombol
+   hamburger di topbar. Tampilan desktop tidak berubah.
+   ===================================================== */
 @media (max-width: 860px) {
   .side {
-    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 50;
+    width: min(260px, 85vw);
+    height: 100%;
+    height: 100dvh;
+    overflow-y: auto;
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition: transform 0.25s ease, visibility 0s linear 0.25s;
+    box-shadow: none;
+  }
+
+  .side--open {
+    transform: translateX(0);
+    visibility: visible;
+    transition: transform 0.25s ease, visibility 0s;
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.2);
+  }
+
+  .side__backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background: rgba(0, 0, 0, 0.4);
+  }
+
+  .topbar__menu {
+    display: grid;
+  }
+
+  .nav__item {
+    min-height: 44px;
+  }
+
+  .mode__toggle {
+    min-height: 24px;
+  }
+}
+
+@media (max-width: 520px) {
+  .main {
+    gap: 16px;
+    padding: 14px 14px 24px;
+  }
+
+  .topbar {
+    padding: 10px 12px;
+    border-radius: 14px;
+  }
+
+  .topbar__actions {
+    gap: 10px;
   }
 }
 </style>
