@@ -1159,4 +1159,148 @@ onBeforeUnmount(() => {
   background: var(--green-500);
   border-radius: 50%;
 }
+
+/* =====================================================
+   RESPONSIVE (HP & tablet) — hanya mengatur layout,
+   tampilan desktop tidak berubah
+   ===================================================== */
+
+/* Cegah elemen flex/grid melebar melebihi layar */
+.page,
+.card,
+.panel,
+.item,
+.alert,
+.metric {
+  min-width: 0;
+}
+
+.item__left b,
+.alert .item__left b,
+.diag__title b,
+.reco li,
+.head p {
+  overflow-wrap: anywhere;
+}
+
+/* Tablet */
+@media (max-width: 1024px) {
+  .metrics {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* HP */
+@media (max-width: 768px) {
+  .page {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  /* Header: judul di atas, tombol di bawah */
+  .head {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .head__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .head__actions .btn {
+    flex: 1 1 140px;
+    justify-content: center;
+    min-height: 38px;
+  }
+
+  /* Kartu metrik 2 kolom */
+  .metrics {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  /* Baris panel jadi 1 kolom (ditumpuk) */
+  .row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  /* Header panel boleh turun baris jika sempit */
+  .panel__head {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  /* Ukuran sentuh tombol kecil */
+  .btn--tiny {
+    min-height: 32px;
+  }
+
+  .pill-btn {
+    min-width: 44px;
+    min-height: 26px;
+  }
+
+  /* Slider lebih mudah disentuh */
+  .slider {
+    height: 6px;
+  }
+
+  .slider::-webkit-slider-thumb {
+    width: 16px;
+    height: 16px;
+  }
+
+  .slider::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+  }
+
+  /* Log: teks & tanggal boleh turun baris */
+  .item--log {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+
+  .item--log small {
+    margin-left: 21px;
+  }
+
+  /* Item kalibrasi: status tidak terpotong */
+  .item .ok {
+    flex: none;
+    text-align: right;
+  }
+}
+
+/* HP kecil */
+@media (max-width: 380px) {
+  .metrics {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .head__actions .btn {
+    flex-basis: 100%;
+  }
+
+  .item--slider {
+    flex-wrap: wrap;
+  }
+
+  .item--slider .slider__wrap {
+    flex: 1 1 100%;
+    order: 3;
+  }
+
+  .value-chip {
+    margin-left: auto;
+  }
+}
 </style>

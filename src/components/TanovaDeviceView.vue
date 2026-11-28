@@ -1199,4 +1199,174 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
 }
+
+/* =====================================================
+   RESPONSIVE (HP & tablet) — hanya mengatur layout,
+   tampilan desktop tidak berubah
+   ===================================================== */
+
+/* Cegah elemen grid/flex melebar melebihi layar */
+.metric-card,
+.card-section,
+.bottom-split-grid > * {
+  min-width: 0;
+}
+
+.dev-sub-text code,
+.dev-main-text,
+.page-subtitle,
+.section-desc {
+  overflow-wrap: anywhere;
+}
+
+/* Tablet */
+@media (max-width: 1024px) {
+  .metrics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .bottom-split-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* HP */
+@media (max-width: 768px) {
+  .tanova-device-container {
+    padding: 16px;
+  }
+
+  /* Header: judul di atas, tombol di bawah */
+  .header-section {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+    margin-bottom: 18px;
+  }
+
+  .page-title {
+    font-size: 22px;
+  }
+
+  .header-buttons {
+    width: 100%;
+    gap: 10px;
+  }
+
+  .header-buttons .btn-secondary,
+  .header-buttons .btn-primary {
+    flex: 1;
+    justify-content: center;
+    min-height: 40px;
+  }
+
+  /* Kartu metrik */
+  .metrics-grid {
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+
+  .metric-card {
+    padding: 14px;
+    gap: 8px;
+  }
+
+  .metric-icon-box {
+    flex: none;
+  }
+
+  .card-section {
+    padding: 16px;
+  }
+
+  .mb-24 {
+    margin-bottom: 18px;
+  }
+
+  /* Header tabel + filter: ditumpuk */
+  .table-header-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .table-filter-group {
+    flex-direction: column;
+    gap: 10px;
+    width: 100%;
+  }
+
+  .search-box {
+    width: 100%;
+  }
+
+  .search-input {
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .filter-select {
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  /* 16px mencegah browser iOS melakukan zoom otomatis saat input difokus */
+  .search-input,
+  .filter-select {
+    font-size: 16px;
+  }
+
+  /* Tabel tetap utuh & bisa digeser ke samping */
+  .table-wrapper {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .custom-table {
+    min-width: 680px;
+  }
+
+  .sensor-table {
+    min-width: 600px;
+  }
+
+  .custom-table th,
+  .custom-table td {
+    white-space: nowrap;
+  }
+
+  /* Header sensor boleh turun baris */
+  .sensor-header-row {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  /* Bar aktuator boleh turun baris */
+  .actuator-bar {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .btn-atur {
+    min-height: 32px;
+  }
+
+  .btn-primary.full-width {
+    min-height: 42px;
+  }
+}
+
+/* HP kecil */
+@media (max-width: 400px) {
+  .tanova-device-container {
+    padding: 12px;
+  }
+
+  .metrics-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .header-buttons {
+    flex-direction: column;
+  }
+}
 </style>
